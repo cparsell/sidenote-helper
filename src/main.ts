@@ -25,6 +25,17 @@ export default class SidenoteCollisionAvoider extends Plugin {
 	private documentHasSidenotes = false;
 
 	async onload() {
+		// Register post-processor for reading mode
+		this.registerMarkdownPostProcessor((element, context) => {
+			const sidenoteSpans =
+				element.querySelectorAll<HTMLElement>("span.sidenote");
+			if (sidenoteSpans.length > 0) {
+				requestAnimationFrame(() => {
+					this.processReadingModeSidenotes(element);
+				});
+			}
+		});
+
 		this.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
 				this.resetRegistry();
@@ -46,12 +57,14 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		);
 		this.registerEvent(
 			this.app.workspace.on("editor-change", () => {
-				// Rescan when document content changes
 				this.scanDocumentForSidenotes();
 				this.scheduleLayout();
 			}),
 		);
-		this.registerDomEvent(window, "resize", () => this.scheduleLayout());
+		this.registerDomEvent(window, "resize", () => {
+			this.scheduleLayout();
+			this.scheduleReadingModeLayout();
+		});
 
 		this.scanDocumentForSidenotes();
 		this.rebindAndSchedule();
@@ -83,11 +96,221 @@ export default class SidenoteCollisionAvoider extends Plugin {
 			cmRoot.dataset.sidenoteMode = "";
 			cmRoot.dataset.hasSidenotes = "";
 		}
+
+		const readingRoot = view?.containerEl.querySelector<HTMLElement>(
+			".markdown-reading-view",
+		);
+		if (readingRoot) {
+			readingRoot
+				.querySelectorAll("span.sidenote-number")
+				.forEach((n) => n.remove());
+			readingRoot
+				.querySelectorAll("small.sidenote-margin")
+				.forEach((n) => n.remove());
+			readingRoot.style.removeProperty("--editor-width");
+			readingRoot.style.removeProperty("--sidenote-scale");
+			readingRoot.dataset.sidenoteMode = "";
+			readingRoot.dataset.hasSidenotes = "";
+		}
+	}
+
+	/**
+	 * Process sidenotes in reading mode
+	 */
+	private processReadingModeSidenotes(element: HTMLElement) {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view) return;
+
+		const readingRoot = view.containerEl.querySelector<HTMLElement>(
+			".markdown-reading-view",
+		);
+		if (!readingRoot) return;
+
+		const rect = readingRoot.getBoundingClientRect();
+		const width = rect.width;
+
+		readingRoot.style.setProperty("--editor-width", `${width}px`);
+
+		let mode: "hidden" | "compact" | "normal" | "full";
+		if (width < SIDENOTE_HIDE_BELOW) {
+			mode = "hidden";
+		} else if (width < SIDENOTE_COMPACT_BELOW) {
+			mode = "compact";
+		} else if (width < SIDENOTE_FULL_ABOVE) {
+			mode = "normal";
+		} else {
+			mode = "full";
+		}
+
+		readingRoot.dataset.sidenoteMode = mode;
+		readingRoot.dataset.hasSidenotes = "true";
+
+		let scaleFactor = 0;
+		if (width >= SIDENOTE_HIDE_BELOW) {
+			scaleFactor = Math.min(
+				1,
+				(width - SIDENOTE_HIDE_BELOW) /
+					(SIDENOTE_FULL_ABOVE - SIDENOTE_HIDE_BELOW),
+			);
+		}
+		readingRoot.style.setProperty(
+			"--sidenote-scale",
+			scaleFactor.toFixed(3),
+		);
+
+		if (mode === "hidden") return;
+
+		const unwrappedSpans = Array.from(
+			element.querySelectorAll<HTMLElement>("span.sidenote"),
+		).filter(
+			(span) =>
+				!span.parentElement?.classList.contains("sidenote-number"),
+		);
+
+		if (unwrappedSpans.length === 0) return;
+
+		const ordered = unwrappedSpans
+			.map((el) => ({
+				el,
+				rect: el.getBoundingClientRect(),
+			}))
+			.sort((a, b) => a.rect.top - b.rect.top);
+
+		const existingCount =
+			readingRoot.querySelectorAll(".sidenote-number").length;
+		let num = existingCount + 1;
+
+		const marginNotes: HTMLElement[] = [];
+
+		for (const { el: span } of ordered) {
+			const numStr = String(num++);
+
+			const wrapper = document.createElement("span");
+			wrapper.className = "sidenote-number";
+			wrapper.dataset.sidenoteNum = numStr;
+
+			const margin = document.createElement("small");
+			margin.className = "sidenote-margin";
+			margin.dataset.sidenoteNum = numStr;
+
+			// Clone the content from the sidenote span to preserve rendered HTML (links, etc.)
+			this.cloneContentToMargin(span, margin);
+
+			span.parentNode?.insertBefore(wrapper, span);
+			wrapper.appendChild(span);
+			wrapper.appendChild(margin);
+
+			marginNotes.push(margin);
+		}
+
+		requestAnimationFrame(() => {
+			const allMargins = Array.from(
+				readingRoot.querySelectorAll<HTMLElement>(
+					"small.sidenote-margin",
+				),
+			);
+			if (allMargins.length > 0) {
+				this.avoidCollisions(allMargins, 8);
+			}
+		});
+	}
+
+	/**
+	 * Clone content from a sidenote span to a margin element,
+	 * preserving links and other HTML elements.
+	 */
+	private cloneContentToMargin(source: HTMLElement, target: HTMLElement) {
+		// Clone all child nodes to preserve links and formatting
+		for (const child of Array.from(source.childNodes)) {
+			const cloned = child.cloneNode(true);
+
+			// If it's a link, ensure it opens properly
+			if (cloned instanceof HTMLAnchorElement) {
+				cloned.rel = "noopener noreferrer";
+				// Don't override target if it's an internal link
+				if (
+					cloned.href.startsWith("http://") ||
+					cloned.href.startsWith("https://")
+				) {
+					cloned.target = "_blank";
+				}
+			}
+
+			// Also check for links within cloned elements
+			if (cloned instanceof HTMLElement) {
+				const links = cloned.querySelectorAll("a");
+				links.forEach((link) => {
+					link.rel = "noopener noreferrer";
+					if (
+						link.href.startsWith("http://") ||
+						link.href.startsWith("https://")
+					) {
+						link.target = "_blank";
+					}
+				});
+			}
+
+			target.appendChild(cloned);
+		}
+	}
+
+	/**
+	 * Schedule a layout update for reading mode
+	 */
+	private scheduleReadingModeLayout() {
+		requestAnimationFrame(() => {
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (!view) return;
+
+			const readingRoot = view.containerEl.querySelector<HTMLElement>(
+				".markdown-reading-view",
+			);
+			if (!readingRoot) return;
+
+			const rect = readingRoot.getBoundingClientRect();
+			const width = rect.width;
+
+			readingRoot.style.setProperty("--editor-width", `${width}px`);
+
+			let mode: "hidden" | "compact" | "normal" | "full";
+			if (width < SIDENOTE_HIDE_BELOW) {
+				mode = "hidden";
+			} else if (width < SIDENOTE_COMPACT_BELOW) {
+				mode = "compact";
+			} else if (width < SIDENOTE_FULL_ABOVE) {
+				mode = "normal";
+			} else {
+				mode = "full";
+			}
+
+			readingRoot.dataset.sidenoteMode = mode;
+
+			let scaleFactor = 0;
+			if (width >= SIDENOTE_HIDE_BELOW) {
+				scaleFactor = Math.min(
+					1,
+					(width - SIDENOTE_HIDE_BELOW) /
+						(SIDENOTE_FULL_ABOVE - SIDENOTE_HIDE_BELOW),
+				);
+			}
+			readingRoot.style.setProperty(
+				"--sidenote-scale",
+				scaleFactor.toFixed(3),
+			);
+
+			const allMargins = Array.from(
+				readingRoot.querySelectorAll<HTMLElement>(
+					"small.sidenote-margin",
+				),
+			);
+			if (allMargins.length > 0) {
+				this.avoidCollisions(allMargins, 8);
+			}
+		});
 	}
 
 	/**
 	 * Scan the current document's source text to determine if it contains any sidenotes.
-	 * This is independent of DOM virtualization.
 	 */
 	private scanDocumentForSidenotes() {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -102,18 +325,21 @@ export default class SidenoteCollisionAvoider extends Plugin {
 			return;
 		}
 
-		// Get the full document text
 		const content = editor.getValue();
-
-		// Check if any sidenote spans exist
 		this.documentHasSidenotes = SIDENOTE_PATTERN.test(content);
-
-		// Reset the regex lastIndex for future tests
 		SIDENOTE_PATTERN.lastIndex = 0;
 
-		// Update the data attribute immediately if we have a cmRoot
 		if (this.cmRoot) {
 			this.cmRoot.dataset.hasSidenotes = this.documentHasSidenotes
+				? "true"
+				: "false";
+		}
+
+		const readingRoot = view.containerEl.querySelector<HTMLElement>(
+			".markdown-reading-view",
+		);
+		if (readingRoot) {
+			readingRoot.dataset.hasSidenotes = this.documentHasSidenotes
 				? "true"
 				: "false";
 		}
@@ -164,7 +390,6 @@ export default class SidenoteCollisionAvoider extends Plugin {
 
 		this.cmRoot = cmRoot;
 
-		// Set initial hasSidenotes state
 		cmRoot.dataset.hasSidenotes = this.documentHasSidenotes
 			? "true"
 			: "false";
@@ -177,6 +402,13 @@ export default class SidenoteCollisionAvoider extends Plugin {
 			}
 		});
 		this.resizeObserver.observe(cmRoot);
+
+		const readingRoot = root.querySelector<HTMLElement>(
+			".markdown-reading-view",
+		);
+		if (readingRoot) {
+			this.resizeObserver.observe(readingRoot);
+		}
 
 		const scroller = cmRoot.querySelector<HTMLElement>(".cm-scroller");
 		if (!scroller) return;
@@ -202,10 +434,6 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		}
 	}
 
-	/**
-	 * Get the document position of a DOM element by finding its CM line
-	 * and querying the editor state for the line's start position.
-	 */
 	private getDocumentPosition(el: HTMLElement): number | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return null;
@@ -230,18 +458,12 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		return pos * 10000 + Math.floor(offsetInLine);
 	}
 
-	/**
-	 * Generate a stable key for a sidenote based on its content and position.
-	 */
 	private getSidenoteKey(el: HTMLElement, docPos: number | null): string {
 		const content = this.normalizeText(el.textContent ?? "");
 		const posKey = docPos !== null ? docPos.toString() : "unknown";
 		return `${posKey}:${content}`;
 	}
 
-	/**
-	 * Assign numbers to sidenotes based on their document position.
-	 */
 	private assignSidenoteNumbers(
 		spans: { el: HTMLElement; docPos: number | null }[],
 	): Map<HTMLElement, number> {
@@ -277,9 +499,6 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		return assignments;
 	}
 
-	/**
-	 * Find the correct number for a sidenote at a given document position.
-	 */
 	private findCorrectNumber(docPos: number | null): number {
 		if (docPos === null) {
 			return this.nextSidenoteNumber++;
@@ -340,7 +559,6 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		}
 
 		cmRoot.dataset.sidenoteMode = mode;
-		// Ensure hasSidenotes is always set
 		cmRoot.dataset.hasSidenotes = this.documentHasSidenotes
 			? "true"
 			: "false";
@@ -404,6 +622,7 @@ export default class SidenoteCollisionAvoider extends Plugin {
 				margin.className = "sidenote-margin";
 				margin.dataset.sidenoteNum = numStr;
 
+				// In source view, we still need to parse markdown links from text
 				const raw = this.normalizeText(span.textContent ?? "");
 				margin.appendChild(this.renderMarkdownLinksToFragment(raw));
 
@@ -427,6 +646,9 @@ export default class SidenoteCollisionAvoider extends Plugin {
 		return (s ?? "").replace(/\s+/g, " ").trim();
 	}
 
+	/**
+	 * Render markdown links in source view (where we only have raw text)
+	 */
 	private renderMarkdownLinksToFragment(text: string): DocumentFragment {
 		const frag = document.createDocumentFragment();
 		const re = /\[([^\]]+)\]\(([^)\s]+)\)/g;
