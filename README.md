@@ -22,7 +22,7 @@ Large Language Models (LLM) were used in the production and editing of this code
 
 ## Known issues
 
-- External links in sidenotes do not currently show the familiar external link icon.
+- Numbers may not update immediately. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it.
 
 ## Goals
 
