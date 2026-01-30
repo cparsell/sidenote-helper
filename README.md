@@ -33,7 +33,7 @@ These are some other strategies I've seen for sidenotes in Obsidian.
 
 ### AI disclaimer
 
-Large Language Models (LLM) were used in the production and editing of this code. While I am comfortable with JavaScript programming, I still struggle to fully understand programming for Obsidian so the robots helped a lot.
+Large Language Models (LLM) were used in the production and editing of this code. While I am comfortable with JavaScript programming, I still struggle to fully understand programming for Obsidian.
 
 ## Known issues
 
