@@ -27,7 +27,7 @@ My goal is to have the same sidenotes work in both Obsidian and the web publishe
 
 ### AI disclaimer
 
-Large Language Models (LLM) were used in the production and editing of this code. While I am comfortable with JavaScript programming, I still struggle to fully understand programming for Obsidian. This plugin just solved a problem for me. I wanted this ability and I couldn't find a good solution for it.
+Large Language Models (LLM) were used in the production and editing of this code. While I am comfortable with JavaScript programming, I still struggle to fully understand programming for Obsidian so the robots helped a lot.
 
 ## Known issues
 
