@@ -23,7 +23,7 @@ My goal is to have the same sidenotes work in both Obsidian and the web publishe
 ### Goal Features:
 
 - **Optional Markdown style syntax:** I'd like an optional Markdown-style mode to enable some sort of coded sidenote like `;;sidenote text;;` or `&&sidenote text&&`. Currently, it only responds to this one HTML tag `<span class="sidenote">`. The benefit of HTML syntax is that it can be made to work in web-published notes as well.
-- Add a command for "Create a new sidenote" so it can be hotkeyed.
+- Add a command for `Create a new sidenote` so it can be hotkeyed.
 
 ## Alternatives:
 
