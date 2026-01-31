@@ -8,7 +8,7 @@ My goal is to have the same sidenotes work in both Obsidian and the web publishe
 
 ### Features:
 
-- **Sidenotes**: Create a sidenote using an HTML tag. Sidenotes then display in the margin of a note
+- **Sidenotes**: Sidenotes are displayed in the margin of a note. Run command `Insert Sidenote` to start one. Sidenotes are encoded using a small HTML tag `<span class="sidenote">`.
 - **They are editable in the margin**. Click on it, edit, and press enter.
 - **Customize**:
     - Show sidenotes in left or right margin
@@ -53,18 +53,7 @@ Large Language Models (LLM) were used in the production and editing of this code
 
 ## Use
 
-Create a sidenote using this:
-
-```html
-This is a normal sentence.<span class="sidenote"
-	>This is a sidenote. See [this link](http://example.com).</span
->
-```
-
-For now, I've set up a snippet that inserts the HTML template of the sidenote. There are Obsidian snippet plugins one could use for this.
-
-I use [Raycast](https://www.raycast.com/) for MacOS where I've made this snippet:
-
+Run the command `Insert Sidenote`. It will insert this:
 ```html
 <span class="sidenote">{cursor}</span>
 ```
