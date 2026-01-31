@@ -1,6 +1,6 @@
 # Sidenotes
 
-I first discovered sidenotes, at least in a conscious way, on [Gwern.net](https://gwern.net/sidenote). He was referencing Edward Tufte's conventions.
+I first discovered sidenotes, at least in a conscious way, on [Gwern.net](https://gwern.net/sidenote) which was referencing [Edward Tufte's conventions](https://edwardtufte.github.io/tufte-css/).
 
 My goal is to have the same sidenotes work in both Obsidian and the web published version of my notes. 
 
@@ -9,7 +9,7 @@ My goal is to have the same sidenotes work in both Obsidian and the web publishe
 ### Features:
 
 - **Sidenotes**: Create a sidenote using an HTML tag. Sidenotes then display in the margin of a note
--  **They are editable in the margin**. Click on it, edit, and press enter.
+- **They are editable in the margin**. Click on it, edit, and press enter.
 - **Customize**:
 	- Show sidenotes in left or right margin
 	- Arabic numbers, Roman, letters, or no numbers
