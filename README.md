@@ -23,7 +23,11 @@ My goal is to have the same sidenotes work in both Obsidian and the web publishe
 ### Goal Features:
 
 - **Optional Markdown style syntax:** I'd like an optional Markdown-style mode to enable some sort of coded sidenote like `;;sidenote text;;` or `&&sidenote text&&`. Currently, it only responds to this one HTML tag `<span class="sidenote">`. The benefit of HTML syntax is that it can be made to work in web-published notes as well.
-- Add a command for `Create a new sidenote` so it can be hotkeyed.
+- ~~Add a command for `Create a new sidenote` so it can be hotkeyed~~ (added 1/30/26).
+
+### Known issues
+
+- ~~Numbers may not update immediately when sequencing changes. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it~~ (Fixed 1/30/26)
 
 ## Alternatives:
 
@@ -37,14 +41,6 @@ These are some other strategies I've seen for sidenotes in Obsidian.
 - [Obsidian-sidenote-callout](https://github.com/xhuajin/obsidian-sidenote-callout/blob/main/README.md) - I did not use a custom callout like this because I wanted the sidenotes to also be publishable.
 - [Tufte style sidenotes](https://medium.com/obsidian-observer/tufte-style-sidenotes-in-obsidian-89b0a785bc54)
 - [Collapsible inline notes and sidenotes](https://forum.obsidian.md/t/collapsible-inline-notes-and-sidenotes/31909)
-
-### AI disclaimer
-
-Large Language Models (LLM) were used in the production and editing of this code. While I am comfortable with JavaScript programming, I still struggle to fully understand programming for Obsidian.
-
-## Known issues
-
-- ~~Numbers may not update immediately when sequencing changes. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it~~ (Fixed 1/30/26)
 
 ## Setup
 
@@ -65,3 +61,7 @@ When I type the keyword `!sidenote` Raycast inserts the snippet.
 I use [Digital Garden](https://github.com/oleeskild/Obsidian-Digital-Garden) to publish a subset of my notes to a website. In the framework Digital Garden has set up, a CSS file called `custom-styles.css` is where one adds any CSS to modify the default styles.
 
 The snippet of CSS I've been using for web publishing is located in `/digital-garden/custom-styles.css`.
+
+## AI disclaimer
+
+Large Language Models (LLM) were used in the production and editing of this code. I'll do my best not to keep it from being slop.
