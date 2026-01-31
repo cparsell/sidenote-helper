@@ -108,6 +108,7 @@ export default class SidenotePlugin extends Plugin {
 	private visibleSidenotes: Set<HTMLElement> = new Set();
 
 	private totalSidenotesInDocument = 0;
+	private isEditingMargin = false;
 
 	async onload() {
 		await this.loadSettings();
@@ -178,10 +179,13 @@ export default class SidenotePlugin extends Plugin {
 		);
 		this.registerEvent(
 			this.app.workspace.on("editor-change", () => {
+				// Skip if we're in the middle of a margin edit
+				if (this.isEditingMargin) return;
+
 				this.scanDocumentForSidenotes();
 				this.needsFullRenumber = true;
 				this.invalidateLayoutCache();
-				this.lastCollisionHash = ""; // Force collision recalculation
+				this.lastCollisionHash = "";
 				this.scheduleLayoutDebounced(100);
 			}),
 		);
@@ -1590,20 +1594,25 @@ export default class SidenotePlugin extends Plugin {
 		const editor = view.editor;
 		if (!editor) return;
 
+		// Save scroll position before making changes
+		const scroller =
+			this.cmRoot?.querySelector<HTMLElement>(".cm-scroller");
+		const scrollTop = scroller?.scrollTop ?? 0;
+
+		// Set flag to prevent layout from interfering
+		this.isEditingMargin = true;
+
 		const content = editor.getValue();
 
-		// Find and replace the sidenote in the source
-		// We need to find the specific sidenote span that contains oldText
+		// Find the sidenote in the source
 		const sidenoteRegex =
 			/<span\s+class\s*=\s*["']sidenote["'][^>]*>([\s\S]*?)<\/span>/gi;
 
 		let match: RegExpExecArray | null;
 		let found = false;
-		let newContent = content;
 
 		// If we have a document position, use it to find the right sidenote
 		if (docPos !== null) {
-			// Convert docPos back to approximate character position
 			const approxCharPos = Math.floor(docPos / 10000);
 
 			while ((match = sidenoteRegex.exec(content)) !== null) {
@@ -1612,46 +1621,106 @@ export default class SidenotePlugin extends Plugin {
 
 				// Check if this match is close to our position and has matching content
 				if (
-					Math.abs(matchStart - approxCharPos) < 100 &&
+					Math.abs(matchStart - approxCharPos) < 200 &&
 					this.normalizeText(matchContent) === this.normalizeText(oldText)
 				) {
-					// Replace this specific sidenote
-					const before = content.slice(0, match.index);
-					const after = content.slice(match.index + match[0].length);
+					// Use replaceRange for surgical edit
+					const from = editor.offsetToPos(match.index);
+					const to = editor.offsetToPos(match.index + match[0].length);
 					const newSpan = `<span class="sidenote">${newText}</span>`;
-					newContent = before + newSpan + after;
+
+					this.isMutating = true;
+					editor.replaceRange(newSpan, from, to);
+					this.isMutating = false;
+
 					found = true;
 					break;
 				}
 			}
 		}
 
-		// Fallback: find by content match
+		// Fallback: find by content match only
 		if (!found) {
 			sidenoteRegex.lastIndex = 0;
+
+			// Collect all matches with matching content
+			const matches: { index: number; length: number; content: string }[] =
+				[];
+
 			while ((match = sidenoteRegex.exec(content)) !== null) {
 				const matchContent = match[1] ?? "";
 				if (
 					this.normalizeText(matchContent) === this.normalizeText(oldText)
 				) {
-					const before = content.slice(0, match.index);
-					const after = content.slice(match.index + match[0].length);
+					matches.push({
+						index: match.index,
+						length: match[0].length,
+						content: matchContent,
+					});
+				}
+			}
+
+			if (matches.length === 1) {
+				// Only one match - safe to replace
+				const singleMatch = matches[0];
+				if (singleMatch) {
+					const from = editor.offsetToPos(singleMatch.index);
+					const to = editor.offsetToPos(
+						singleMatch.index + singleMatch.length,
+					);
 					const newSpan = `<span class="sidenote">${newText}</span>`;
-					newContent = before + newSpan + after;
+
+					this.isMutating = true;
+					editor.replaceRange(newSpan, from, to);
+					this.isMutating = false;
+
 					found = true;
-					break;
+				}
+			} else if (matches.length > 1 && docPos !== null) {
+				// Multiple matches - try to pick the closest one by position
+				const approxCharPos = Math.floor(docPos / 10000);
+				let closest: {
+					index: number;
+					length: number;
+					content: string;
+				} | null = null;
+				let closestDist = Infinity;
+
+				for (const m of matches) {
+					const dist = Math.abs(m.index - approxCharPos);
+					if (dist < closestDist) {
+						closest = m;
+						closestDist = dist;
+					}
+				}
+
+				if (closest) {
+					const from = editor.offsetToPos(closest.index);
+					const to = editor.offsetToPos(closest.index + closest.length);
+					const newSpan = `<span class="sidenote">${newText}</span>`;
+
+					this.isMutating = true;
+					editor.replaceRange(newSpan, from, to);
+					this.isMutating = false;
+
+					found = true;
 				}
 			}
 		}
 
-		if (found && newContent !== content) {
-			// Update the editor content
-			this.isMutating = true;
-			editor.setValue(newContent);
-			this.isMutating = false;
-
-			// The editor-change event will trigger a re-layout
+		// Restore scroll position after edit
+		if (found) {
+			// Use multiple RAFs to ensure we restore after all updates
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => {
+					if (scroller) {
+						scroller.scrollTop = scrollTop;
+					}
+					this.isEditingMargin = false;
+				});
+			});
 		} else {
+			this.isEditingMargin = false;
 			// Couldn't find the sidenote to update, just restore the margin display
 			margin.innerHTML = "";
 			margin.appendChild(
