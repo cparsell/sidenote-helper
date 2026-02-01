@@ -5,7 +5,7 @@ I first discovered sidenotes, in a conscious way, on [Gwern.net](https://gwern.n
 My goal is to have the same sidenotes work in both Obsidian **and** the web published version of my notes.
 
 ![Sidenotes Basics](https://github.com/cparsell/sidenotes/blob/main/Screenshot2.png)
-**Basic sidenote capabilities demonstrates**
+**Basic sidenote capabilities demonstrated**
 
 ![Neumorphic badges](https://github.com/cparsell/sidenotes/blob/main/Screenshot-badges.png)
 **An optional style that highlights references. Useful in long texts**
