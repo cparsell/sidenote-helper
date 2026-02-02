@@ -322,7 +322,9 @@ export default class SidenotePlugin extends Plugin {
 
 	async loadSettings() {
 		try {
-			const data = (await this.loadData()) as Partial<SidenoteSettings> | undefined;
+			const data = (await this.loadData()) as
+				| Partial<SidenoteSettings>
+				| undefined;
 			this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
 		} catch (error) {
 			console.error("Sidenote plugin: Failed to load settings", error);
@@ -394,6 +396,13 @@ export default class SidenotePlugin extends Plugin {
 				let needsCollisionUpdate = false;
 				for (const entry of entries) {
 					const el = entry.target as HTMLElement;
+
+					// Check if element is still in the DOM
+					if (!el.isConnected) {
+						this.visibleSidenotes.delete(el);
+						continue;
+					}
+
 					if (entry.isIntersecting) {
 						if (!this.visibleSidenotes.has(el)) {
 							this.visibleSidenotes.add(el);
@@ -464,7 +473,12 @@ export default class SidenotePlugin extends Plugin {
 
 	private injectStyles() {
 		if (this.styleEl) {
-			this.styleEl.remove();
+			try {
+				this.styleEl.remove();
+			} catch (e) {
+				// Element may already be removed
+			}
+			this.styleEl = null;
 		}
 
 		this.styleEl = document.createElement("style");
@@ -885,7 +899,11 @@ export default class SidenotePlugin extends Plugin {
 				}
     `;
 
-		document.head.appendChild(this.styleEl);
+		try {
+			document.head.appendChild(this.styleEl);
+		} catch (error) {
+			console.error("Sidenote plugin: Failed to inject styles", error);
+		}
 	}
 	// ==================== Number Formatting ====================
 
@@ -1764,6 +1782,14 @@ export default class SidenotePlugin extends Plugin {
 			}, 100);
 		});
 		this.resizeObserver.observe(cmRoot);
+
+		// Store cleanup for the resize timeout
+		this.cleanups.push(() => {
+			if (resizeTimeout !== null) {
+				window.clearTimeout(resizeTimeout);
+				resizeTimeout = null;
+			}
+		});
 
 		const readingRoot = root.querySelector<HTMLElement>(
 			".markdown-reading-view",
@@ -2656,10 +2682,16 @@ export default class SidenotePlugin extends Plugin {
 
 		// Update the source document
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) return;
+		if (!view?.editor) {
+			// Restore display even if we can't save
+			margin.innerHTML = "";
+			margin.appendChild(
+				this.renderLinksToFragment(this.normalizeText(newText)),
+			);
+			return;
+		}
 
 		const editor = view.editor;
-		if (!editor) return;
 
 		// Save scroll position before making changes
 		const scroller =
@@ -2689,8 +2721,11 @@ export default class SidenotePlugin extends Plugin {
 				const newSpan = `<span class="sidenote">${newText}</span>`;
 
 				this.isMutating = true;
-				editor.replaceRange(newSpan, from, to);
-				this.isMutating = false;
+				try {
+					editor.replaceRange(newSpan, from, to);
+				} finally {
+					this.isMutating = false;
+				}
 
 				found = true;
 				break;
@@ -2698,18 +2733,22 @@ export default class SidenotePlugin extends Plugin {
 		}
 
 		// Restore scroll position after edit
+		const restoreState = () => {
+			if (scroller) {
+				scroller.scrollTop = scrollTop;
+			}
+			this.isEditingMargin = false;
+		};
+
 		if (found) {
 			// Use multiple RAFs to ensure we restore after all updates
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
-					if (scroller) {
-						scroller.scrollTop = scrollTop;
-					}
-					this.isEditingMargin = false;
+					restoreState();
 				});
 			});
 		} else {
-			this.isEditingMargin = false;
+			restoreState();
 			// Couldn't find the sidenote to update, just restore the margin display
 			margin.innerHTML = "";
 			margin.appendChild(
@@ -2879,32 +2918,34 @@ export default class SidenotePlugin extends Plugin {
 	 * This is more robust for ensuring proper spacing.
 	 */
 	private avoidCollisions(nodes: HTMLElement[], spacing: number) {
-		if (nodes.length === 0) return;
+		if (!nodes || nodes.length === 0) return;
 
-		// Always recalculate - remove the hash check for more robustness
 		// Reset all shifts first
 		for (const sn of nodes) {
-			sn.style.setProperty("--sidenote-shift", "0px");
+			if (sn?.style) {
+				sn.style.setProperty("--sidenote-shift", "0px");
+			}
 		}
 
 		// Force a reflow to get accurate measurements after reset
-		void nodes[0]?.offsetHeight;
+		const firstNode = nodes[0];
+		if (firstNode) {
+			void firstNode.offsetHeight;
+		}
 
 		// Measure and sort
 		const measured = nodes
+			.filter((el) => el && el.getBoundingClientRect) // Filter out invalid elements
 			.map((el) => ({
 				el,
 				rect: el.getBoundingClientRect(),
 			}))
-			.filter((item) => item.rect.height > 0) // Filter out hidden/zero-height elements
+			.filter((item) => item.rect && item.rect.height > 0)
 			.sort((a, b) => a.rect.top - b.rect.top);
 
 		if (measured.length === 0) return;
 
-		const updates: {
-			el: HTMLElement;
-			shift: number;
-		}[] = [];
+		const updates: { el: HTMLElement; shift: number }[] = [];
 		let bottom = -Infinity;
 
 		for (const { el, rect } of measured) {
@@ -2922,7 +2963,9 @@ export default class SidenotePlugin extends Plugin {
 
 		// Apply all updates
 		for (const { el, shift } of updates) {
-			el.style.setProperty("--sidenote-shift", `${shift}px`);
+			if (el?.style) {
+				el.style.setProperty("--sidenote-shift", `${shift}px`);
+			}
 		}
 
 		// Update hash after successful collision avoidance
