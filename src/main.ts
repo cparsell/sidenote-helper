@@ -90,6 +90,9 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 // Regex to detect sidenote spans in source text
 const SIDENOTE_PATTERN = /<span\s+class\s*=\s*["']sidenote["'][^>]*>/gi;
 
+// ======================================================
+// ================= Main Plugin Class ==================
+// ======================================================
 export default class SidenotePlugin extends Plugin {
 	settings: SidenoteSettings;
 
@@ -318,11 +321,13 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData(),
-		);
+		try {
+			const data = (await this.loadData()) as Partial<SidenoteSettings> | undefined;
+			this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+		} catch (error) {
+			console.error("Sidenote plugin: Failed to load settings", error);
+			this.settings = Object.assign({}, DEFAULT_SETTINGS);
+		}
 	}
 
 	async saveSettings() {
@@ -919,10 +924,11 @@ export default class SidenotePlugin extends Plugin {
 				num -= value;
 			}
 		}
-		return result;
+		return result || "i";
 	}
 
 	private toLetters(num: number): string {
+		if (num <= 0) return "a"; // Handle edge case
 		let result = "";
 		while (num > 0) {
 			num--;
@@ -2955,9 +2961,9 @@ export default class SidenotePlugin extends Plugin {
 	}
 }
 
+// ======================================================
 // ==================== Settings Tab ====================
-
-// ==================== Settings Tab ====================
+// ======================================================
 
 class SidenoteSettingTab extends PluginSettingTab {
 	plugin: SidenotePlugin;
@@ -3293,8 +3299,9 @@ class SidenoteSettingTab extends PluginSettingTab {
 	}
 }
 
-// ==================== CodeMirror 6 Footnote Sidenote Widget ====================
-
+// ======================================================
+// ========CodeMirror 6 Footnote Sidenote Widget ========
+// ======================================================
 /**
  * Widget that displays a footnote as a sidenote in the margin.
  */
