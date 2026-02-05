@@ -816,68 +816,72 @@ export default class SidenotePlugin extends Plugin {
 				? `
         /* Pill badge variables */
         :root {
-						--sn-pill-bg: rgba(255, 255, 255, 0.05);
-            --sn-pill-text: #ffffff;
-						--sn-pill-border: rgba(255, 255, 255, 0.1);
-            --sn-pill-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-            --sn-pill-hover-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+					--sn-pill-bg: rgba(255, 255, 255, 0.05);
+					--sn-pill-text: #ffffff;
+					--sn-pill-border: rgba(255, 255, 255, 0.1);
+					--sn-pill-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+					--sn-pill-hover-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
         }
 
         .sidenote-margin[data-sidenote-num]::before {
-            content: attr(data-sidenote-num) !important;
-            display: inline-flex !important;
-            align-items: center;
-            justify-content: center;
-            min-width: 1.5em;
-            height: 1.5em;
-            margin-right: 10px;
-            padding: 0 6px;
-            background: ${s.numberColor ? s.numberColor : "var(--sn-pill-bg)"} !important;
-            border: 1px solid var(--sn-pill-border) !important;
-            border-radius: 999px !important;
-            color: var(--sn-pill-text) !important;
-            font-family: var(--font-monospace) !important;
-            font-size: 0.8em !important;
-            font-weight: 700 !important;
-            vertical-align: middle;
-            line-height: 1;
-            box-shadow: var(--sn-pill-shadow);
-            transition: box-shadow 0.15s ease, transform 0.15s ease;
+					content: attr(data-sidenote-num) !important;
+					display: inline-flex !important;
+					align-items: center;
+					justify-content: center;
+					min-width: 1.5em;
+					height: 1.5em;
+					margin-right: 10px;
+					padding: 0 6px;
+					background: ${s.numberColor ? s.numberColor : "var(--sn-pill-bg)"} !important;
+					border: 1px solid var(--sn-pill-border) !important;
+					border-radius: 999px !important;
+					color: var(--sn-pill-text) !important;
+					font-family: var(--font-monospace) !important;
+					font-size: 0.8em !important;
+					font-weight: 700 !important;
+					vertical-align: middle;
+					line-height: 1;
+					box-shadow: var(--sn-pill-shadow);
+					transition: box-shadow 0.15s ease, transform 0.15s ease;
         }
 
         .sidenote-margin:hover[data-sidenote-num]::before {
-            box-shadow: var(--sn-pill-hover-shadow);
-            transform: scale(1.1);
+					box-shadow: var(--sn-pill-hover-shadow);
+					transform: scale(1.1);
         }
 
         .sidenote-margin[data-editing="true"][data-sidenote-num]::before {
-            box-shadow: var(--sn-pill-hover-shadow);
-            transform: scale(1.1);
+					box-shadow: var(--sn-pill-hover-shadow);
+					transform: scale(1.1);
         }
 
         .sidenote-number::after {
-            content: attr(data-sidenote-num);
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 1.2em;
-            height: 1.2em;
-            background: ${s.numberColor ? s.numberColor : "var(--sn-pill-bg)"};
-            border: 1px solid var(--sn-pill-border) !important;
-            border-radius: 999px;
-            color: var(--sn-pill-text);
-            font-size: 0.66em;
-            font-weight: 700;
-            margin-left: 2px;
-            margin-right: 0.2rem;
-            vertical-align: super;
-            line-height: 0;
-            box-shadow: var(--sn-pill-shadow);
+					content: attr(data-sidenote-num);
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					min-width: 1.2em;
+					height: 1.2em;
+					background: ${s.numberColor ? s.numberColor : "var(--sn-pill-bg)"};
+					border: 1px solid var(--sn-pill-border) !important;
+					border-radius: 999px;
+					color: var(--sn-pill-text);
+					font-size: 0.66em;
+					font-weight: 700;
+					margin-left: 2px;
+					margin-right: 0.2rem;
+					vertical-align: super;
+					line-height: 0;
+					box-shadow: var(--sn-pill-shadow);
         }
 
         .sidenote-number:hover::after {
-            box-shadow: var(--sn-pill-hover-shadow);
+          box-shadow: var(--sn-pill-hover-shadow);
         }
+
+				.sidenote-number:hover {
+					color: #ffffff;
+				}
     `
 				: "";
 
