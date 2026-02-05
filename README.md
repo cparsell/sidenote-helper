@@ -83,4 +83,4 @@ The snippet of CSS I've been using for web publishing is located in `/digital-ga
 
 ## AI disclaimer
 
-Large Language Models (LLM) were used in the production and editing of this code. I'll do my best not to keep it from being slop.
+Large Language Models (LLM) were used in the production and editing of this code. I'll do my best to keep it from being slop.
