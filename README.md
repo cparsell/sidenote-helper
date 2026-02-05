@@ -8,7 +8,7 @@ My goal is to have the same sidenotes work in both Obsidian **and** the web publ
 _Basic sidenote capabilities demonstrated_
 
 ![Neumorphic badges](https://github.com/cparsell/sidenotes/blob/main/Screenshot-badges-multi.png)
-_An optional style that highlights references. Useful in long texts_
+_An optional style that highlights references_
 
 ### Features
 
