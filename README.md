@@ -32,15 +32,6 @@ _An optional style that highlights references. Useful in long texts_
 - **Optional Markdown style syntax:** I'd like an optional Markdown-style mode to enable some sort of coded sidenote like `;;sidenote text;;` or `&&sidenote text&&`. Currently, it only responds to this one HTML tag `<span class="sidenote">`. The benefit of HTML syntax is that it can be made to work in web-published notes as well.
 - An option to convert footnotes into sidenotes in Reading Mode and in Editing Mode. Current only works in Reading Mode.
 
-### Known issues
-
-- ~~Footnotes, when converted to sidenotes, collide and/or are not positioned properly in the sidenote column.~~ (Tentatively fixed 2/3/26)
-- ~~Sidenotes seem to collide with each other in certain circumstances. So far I just see it in Reading Mode.~~ (Fixed 2/2/26)
-- ~~Numbers may not update immediately when sequencing changes. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it~~ (Fixed 1/30/26)
-- ~~The cursor is brought to the top of the note after editing in the margin, if one edits/deletes the content in the note.~~ (Fixed 1/31/26)
-- ~~When editing sidenotes in the margin, after pressing enter, the wrong sidenote may get updated if two sidenotes have the same text~~ (Fixed 1/31/26).
-- ~~Also when editing sidenotes in the margins, especially lower down in a note, the numbers may reset. e.g. instead of being 5,6 and 7, they become 1, 2, and 3~~ (Fixed 1/31/26).
-
 ## Alternatives:
 
 These are some other strategies I've seen for sidenotes in Obsidian.
@@ -82,6 +73,15 @@ Run the command `Insert Sidenote`.
 I use [Digital Garden](https://github.com/oleeskild/Obsidian-Digital-Garden) to publish a subset of my notes to a website. In the framework Digital Garden has set up, a CSS file called `custom-styles.css` is where one adds any CSS to modify the default styles.
 
 The snippet of CSS I've been using for web publishing is located in `/digital-garden/custom-styles.css`.
+
+### Known issues
+
+- ~~Footnotes, when converted to sidenotes, collide and/or are not positioned properly in the sidenote column.~~ (Tentatively fixed 2/3/26)
+- ~~Sidenotes seem to collide with each other in certain circumstances. So far I just see it in Reading Mode.~~ (Fixed 2/2/26)
+- ~~Numbers may not update immediately when sequencing changes. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it~~ (Fixed 1/30/26)
+- ~~The cursor is brought to the top of the note after editing in the margin, if one edits/deletes the content in the note.~~ (Fixed 1/31/26)
+- ~~When editing sidenotes in the margin, after pressing enter, the wrong sidenote may get updated if two sidenotes have the same text~~ (Fixed 1/31/26).
+- ~~Also when editing sidenotes in the margins, especially lower down in a note, the numbers may reset. e.g. instead of being 5,6 and 7, they become 1, 2, and 3~~ (Fixed 1/31/26).
 
 ## AI disclaimer
 
