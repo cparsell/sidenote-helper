@@ -94,6 +94,9 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 
 // Regex to detect sidenote spans in source text
 const SIDENOTE_PATTERN = /<span\s+class\s*=\s*["']sidenote["'][^>]*>/gi;
+const RESIZE_DEBOUNCE_MS = 100;
+const FOOTNOTE_RENDER_DELAY_MS = 100;
+const SCROLL_DEBOUNCE_MS = 50;
 
 // ======================================================
 // ================= Main Plugin Class ==================
@@ -138,6 +141,8 @@ export default class SidenotePlugin extends Plugin {
 	private footnoteProcessingTimer: number | null = null;
 
 	private pendingFootnoteEdit: string | null = null;
+	private pendingFootnoteEditRetries = 0;
+	private readonly MAX_FOOTNOTE_EDIT_RETRIES = 10;
 
 	async onload() {
 		await this.loadSettings();
@@ -147,9 +152,7 @@ export default class SidenotePlugin extends Plugin {
 		this.setupVisibilityObserver();
 
 		// Register the CM6 extension for footnote sidenotes in editing mode
-		// if (this.settings.sidenoteFormat === "footnote-edit") {
 		this.registerEditorExtension([createFootnoteSidenotePlugin(this)]);
-		// }
 
 		// Add command to insert sidenote
 		this.addCommand({
@@ -287,11 +290,13 @@ export default class SidenotePlugin extends Plugin {
 				this.rebindAndSchedule();
 			}),
 		);
+
 		this.registerEvent(
 			this.app.workspace.on("layout-change", () =>
 				this.rebindAndSchedule(),
 			),
 		);
+
 		this.registerEvent(
 			this.app.workspace.on("file-open", (_file: TFile | null) => {
 				this.resetRegistry();
@@ -300,6 +305,7 @@ export default class SidenotePlugin extends Plugin {
 				this.rebindAndSchedule();
 			}),
 		);
+
 		this.registerEvent(
 			this.app.workspace.on("editor-change", () => {
 				// Skip if we're in the middle of a margin edit
@@ -308,12 +314,11 @@ export default class SidenotePlugin extends Plugin {
 				this.scanDocumentForSidenotes();
 				this.needsFullRenumber = true;
 				this.invalidateLayoutCache();
-				// this.lastCollisionHash = "";
-				this.scheduleLayoutDebounced(100);
+				this.scheduleLayoutDebounced(RESIZE_DEBOUNCE_MS);
 			}),
 		);
 		this.registerDomEvent(window, "resize", () => {
-			this.scheduleLayoutThrottled(100);
+			this.scheduleLayoutThrottled(RESIZE_DEBOUNCE_MS);
 			this.scheduleReadingModeLayoutThrottled(100);
 		});
 
@@ -328,6 +333,7 @@ export default class SidenotePlugin extends Plugin {
 
 		// Clear pending edit
 		this.pendingFootnoteEdit = null;
+		this.pendingFootnoteEditRetries = 0;
 
 		// Clean up footnote processing timer
 		if (this.footnoteProcessingTimer !== null) {
@@ -567,11 +573,19 @@ export default class SidenotePlugin extends Plugin {
 		);
 
 		if (!wrapper) {
-			// Widget might not be rendered yet, try again
-			this.pendingFootnoteEdit = footnoteId;
-			setTimeout(() => {
-				this.triggerPendingFootnoteEdit();
-			}, 100);
+			// Widget might not be rendered yet, try again (with limit)
+			if (
+				this.pendingFootnoteEditRetries < this.MAX_FOOTNOTE_EDIT_RETRIES
+			) {
+				this.pendingFootnoteEdit = footnoteId;
+				this.pendingFootnoteEditRetries++;
+				setTimeout(() => {
+					this.triggerPendingFootnoteEdit();
+				}, 100);
+			} else {
+				// Give up after max retries
+				this.pendingFootnoteEditRetries = 0;
+			}
 			return;
 		}
 
@@ -918,7 +932,6 @@ export default class SidenotePlugin extends Plugin {
 				: "";
 
 		// Generate positioning styles based on anchor mode
-		const anchorMode = s.sidenoteAnchor;
 		const gap1 = s.sidenoteGap;
 		const gap2 = s.sidenoteGap2;
 
@@ -1218,19 +1231,6 @@ export default class SidenotePlugin extends Plugin {
 				this.settings.sidenoteFormat === "footnote-edit"
 					? `
 			.cm-line:has(.sidenote-number[data-footnote-id]) .cm-footref {
-				display: none;
-			}
-			`
-					: ""
-			}
-
-			/* Hide footnote definitions in editing mode when using footnote-edit */
-			${
-				this.settings.sidenoteFormat === "footnote-edit"
-					? `
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="normal"] .cm-line.HyperMD-footnote,
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="compact"] .cm-line.HyperMD-footnote,
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
 				display: none;
 			}
 			`
@@ -1681,13 +1681,6 @@ export default class SidenotePlugin extends Plugin {
 				readingRoot.querySelectorAll("section.footnotes li, .footnotes li")
 					.length > 0;
 
-			console.debug(
-				"Sidenote plugin: Checking footnotes - refs:",
-				hasRefs,
-				"defs:",
-				hasDefs,
-			);
-
 			if (hasRefs && hasDefs) {
 				requestAnimationFrame(() => {
 					requestAnimationFrame(() => {
@@ -2017,7 +2010,7 @@ export default class SidenotePlugin extends Plugin {
 					definitions.set(currentId, currentText.join(" ").trim());
 				}
 
-				currentId = defMatch[1] ?? null;
+				currentId = defMatch[1] || null;
 				currentText = defMatch[2] ? [defMatch[2]] : [];
 			} else if (currentId !== null) {
 				// Check for continuation line (indented)
@@ -2242,7 +2235,6 @@ export default class SidenotePlugin extends Plugin {
 		cmRoot.style.setProperty("--sidenote-scale", scaleFactor.toFixed(3));
 
 		// Determine if we should process sidenotes in editing mode
-		const processHtmlSidenotes = this.settings.sidenoteFormat === "html";
 		const processFootnoteSidenotes =
 			this.settings.sidenoteFormat === "footnote-edit";
 
@@ -3453,11 +3445,17 @@ class FootnoteSidenoteWidget extends WidgetType {
 		margin.dataset.sidenoteNum = this.numberText;
 		margin.style.setProperty("--sidenote-shift", "0px");
 
-		// Render the content with markdown formatting support
-		const fragment = this.plugin.renderLinksToFragmentPublic(
-			this.plugin.normalizeTextPublic(this.content),
-		);
-		margin.appendChild(fragment);
+		if (this.content.trim()) {
+			// Render the content with markdown formatting support
+			const fragment = this.plugin.renderLinksToFragmentPublic(
+				this.plugin.normalizeTextPublic(this.content),
+			);
+			margin.appendChild(fragment);
+		} else {
+			// if this.content is empty...
+			margin.textContent = "(empty)";
+			margin.style.opacity = "0.5";
+		}
 
 		// Set up editing for the margin
 		this.setupMarginEditing(margin);

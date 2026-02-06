@@ -1,6 +1,10 @@
 /* If you also use Digital Garden plugin to publish Obsidian notes,
    add this to the existing custom-styles.css file to make sidenotes
-   appear properly in the published vrsion. Adjust styles as needed. */
+   appear properly in the published vrsion. Adjust styles as needed. 
+   
+   THIS WORKS WITH SIDENOTES FORMATED WITH HTML SPAN ELEMENTS, 
+   NOT WITH MARKDOWN FOOTNOTES.
+   */
 
 body {
   counter-reset: sidenote-counter;
