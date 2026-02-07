@@ -1617,16 +1617,60 @@ export default class SidenotePlugin extends Plugin {
 				if (item.footnoteHtml) {
 					this.cloneContentToMargin(item.footnoteHtml, margin);
 				} else {
-					// Fallback to text rendering
 					margin.appendChild(
 						this.renderLinksToFragment(this.normalizeText(item.text)),
 					);
+				}
+
+				// Set up margin click-to-edit for footnotes
+				if (item.footnoteId) {
+					const footnoteId = item.footnoteId;
+
+					margin.addEventListener("mousedown", (e) => {
+						e.stopPropagation();
+					});
+
+					margin.addEventListener("click", (e) => {
+						e.preventDefault();
+						e.stopPropagation();
+
+						if (margin.dataset.editing !== "true") {
+							this.startReadingModeMarginEdit(margin, footnoteId);
+						}
+					});
 				}
 			}
 
 			item.el.parentNode?.insertBefore(wrapper, item.el);
 			wrapper.appendChild(item.el);
 			wrapper.appendChild(margin);
+
+			// Add click handler on wrapper to trigger margin editing (for footnote sidenotes)
+			if (item.type === "footnote" && item.footnoteId) {
+				const footnoteId = item.footnoteId;
+
+				wrapper.addEventListener("click", (e) => {
+					// Don't trigger if clicking on the margin itself
+					if ((e.target as HTMLElement).closest(".sidenote-margin")) {
+						return;
+					}
+
+					e.preventDefault();
+					e.stopPropagation();
+
+					// Start editing the margin
+					if (margin.dataset.editing !== "true") {
+						this.startReadingModeMarginEdit(margin, footnoteId);
+					}
+				});
+
+				wrapper.addEventListener("mousedown", (e) => {
+					if ((e.target as HTMLElement).closest(".sidenote-margin")) {
+						return;
+					}
+					e.stopPropagation();
+				});
+			}
 
 			// Calculate line offset: how far down from the positioned parent is this reference?
 			this.applyLineOffset(wrapper, margin, false);
@@ -1692,6 +1736,127 @@ export default class SidenotePlugin extends Plugin {
 				this.scheduleFootnoteProcessing();
 			}
 		}, 150); // Longer delay to allow footnotes section to render
+	}
+
+	/**
+	 * Start editing a footnote sidenote margin in reading mode.
+	 */
+	private startReadingModeMarginEdit(
+		margin: HTMLElement,
+		footnoteId: string,
+	) {
+		margin.dataset.editing = "true";
+
+		// Get the current content
+		const currentText = margin.textContent ?? "";
+
+		// Clear margin and make it editable
+		margin.innerHTML = "";
+		margin.contentEditable = "true";
+		margin.textContent = currentText;
+		margin.focus();
+
+		// Select all text
+		const selection = window.getSelection();
+		const range = document.createRange();
+		range.selectNodeContents(margin);
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+
+		const onKeyDown = (e: KeyboardEvent) => {
+			e.stopPropagation();
+
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				margin.blur();
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				margin.dataset.editing = "false";
+				margin.contentEditable = "false";
+				margin.innerHTML = "";
+				margin.appendChild(
+					this.renderLinksToFragment(this.normalizeText(currentText)),
+				);
+				margin.removeEventListener("blur", onBlur);
+				margin.removeEventListener("keydown", onKeyDown);
+				margin.removeEventListener("keyup", onKeyUp);
+				margin.removeEventListener("keypress", onKeyPress);
+			}
+		};
+
+		const onKeyUp = (e: KeyboardEvent) => {
+			e.stopPropagation();
+		};
+
+		const onKeyPress = (e: KeyboardEvent) => {
+			e.stopPropagation();
+		};
+
+		const onBlur = () => {
+			this.finishReadingModeMarginEdit(margin, footnoteId, currentText);
+			margin.removeEventListener("blur", onBlur);
+			margin.removeEventListener("keydown", onKeyDown);
+			margin.removeEventListener("keyup", onKeyUp);
+			margin.removeEventListener("keypress", onKeyPress);
+		};
+
+		margin.addEventListener("blur", onBlur);
+		margin.addEventListener("keydown", onKeyDown);
+		margin.addEventListener("keyup", onKeyUp);
+		margin.addEventListener("keypress", onKeyPress);
+	}
+
+	/**
+	 * Finish editing a footnote sidenote margin in reading mode and save to source.
+	 */
+	private finishReadingModeMarginEdit(
+		margin: HTMLElement,
+		footnoteId: string,
+		originalText: string,
+	) {
+		const newText = margin.textContent ?? "";
+
+		margin.dataset.editing = "false";
+		margin.contentEditable = "false";
+
+		// Restore rendered content
+		margin.innerHTML = "";
+		margin.appendChild(
+			this.renderLinksToFragment(this.normalizeText(newText)),
+		);
+
+		// If no change, we're done
+		if (newText === originalText) {
+			return;
+		}
+
+		// Update the source document
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.editor) return;
+
+		const editor = view.editor;
+		const content = editor.getValue();
+
+		// The footnoteId from reading mode is like "fn-1-abc123", we need just the number/id part
+		// Extract the actual footnote identifier
+		const idMatch = footnoteId.match(/^fn-(.+?)(?:-[a-f0-9]+)?$/i);
+		const actualId = idMatch?.[1] ?? footnoteId.replace(/^fn-/, "");
+
+		// Find and replace the footnote definition
+		const escapedId = actualId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const footnoteDefRegex = new RegExp(
+			`^(\\[\\^${escapedId}\\]:\\s*)(.+(?:\\n(?:[ \\t]+.+)*)?)$`,
+			"gm",
+		);
+
+		const match = footnoteDefRegex.exec(content);
+		if (match) {
+			const prefix = match[1] ?? "";
+			const from = editor.offsetToPos(match.index + prefix.length);
+			const to = editor.offsetToPos(match.index + match[0].length);
+
+			editor.replaceRange(newText, from, to);
+		}
 	}
 
 	/**
@@ -3505,6 +3670,30 @@ class FootnoteSidenoteWidget extends WidgetType {
 		this.setupMarginEditing(margin);
 
 		wrapper.appendChild(margin);
+
+		// Add click handler on wrapper (the number badge) to trigger margin editing
+		wrapper.addEventListener("click", (e) => {
+			// Don't trigger if clicking directly on the margin (it has its own handler)
+			if ((e.target as HTMLElement).closest(".sidenote-margin")) {
+				return;
+			}
+
+			e.preventDefault();
+			e.stopPropagation();
+
+			// Trigger editing on the margin
+			if (margin.dataset.editing !== "true") {
+				this.startMarginEdit(margin);
+			}
+		});
+
+		// Prevent mousedown from propagating to CM6 editor
+		wrapper.addEventListener("mousedown", (e) => {
+			if ((e.target as HTMLElement).closest(".sidenote-margin")) {
+				return;
+			}
+			e.stopPropagation();
+		});
 
 		// After the widget is attached to the DOM, calculate line offset and trigger collision avoidance
 		requestAnimationFrame(() => {
