@@ -1082,18 +1082,18 @@ export default class SidenotePlugin extends Plugin {
 	}
 	
 	.sidenote-margin {
-				position: absolute;
-				top: 0.2em;
-				width: var(--sidenote-width);
-				font-size: ${s.fontSize}%;
-				line-height: ${s.lineHeight};
-				overflow-wrap: break-word;
-				transform: translateY(var(--sidenote-shift, 0px));
-				will-change: transform;
-				z-index: 10;
-				pointer-events: auto;
-				${transitionRule}
-		}
+		position: absolute;
+		top: 0;
+		width: var(--sidenote-width);
+		font-size: ${s.fontSize}%;
+		line-height: ${s.lineHeight};
+		overflow-wrap: break-word;
+		transform: translateY(calc(var(--sidenote-line-offset, 0px) + var(--sidenote-shift, 0px)));
+		will-change: transform;
+		z-index: 10;
+		pointer-events: auto;
+		${transitionRule}
+	}
 	
 	.markdown-source-view.mod-cm6[data-sidenote-mode="compact"] .sidenote-margin,
 	.markdown-reading-view[data-sidenote-mode="compact"] .sidenote-margin {
@@ -1213,7 +1213,7 @@ export default class SidenotePlugin extends Plugin {
 				font-size: ${s.fontSize}%;
 				line-height: ${s.lineHeight};
 				overflow-wrap: break-word;
-				transform: translateY(var(--sidenote-shift, 0px));
+				transform: translateY(calc(var(--sidenote-line-offset, 0px) + var(--sidenote-shift, 0px)));
 				will-change: transform;
 				z-index: 10;
 				pointer-events: auto;
@@ -1628,6 +1628,9 @@ export default class SidenotePlugin extends Plugin {
 			wrapper.appendChild(item.el);
 			wrapper.appendChild(margin);
 
+			// Calculate line offset: how far down from the positioned parent is this reference?
+			this.applyLineOffset(wrapper, margin, false);
+
 			this.observeSidenoteVisibility(margin);
 			marginNotes.push(margin);
 		}
@@ -1636,6 +1639,9 @@ export default class SidenotePlugin extends Plugin {
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
 				if (!readingRoot.isConnected) return;
+
+				// Force reflow to ensure line offsets are applied
+				void readingRoot.offsetHeight;
 
 				// Calculate and apply sidenote positioning
 				this.updateSidenotePositioning(readingRoot, true);
@@ -1686,6 +1692,52 @@ export default class SidenotePlugin extends Plugin {
 				this.scheduleFootnoteProcessing();
 			}
 		}, 150); // Longer delay to allow footnotes section to render
+	}
+
+	/**
+	 * Calculate and apply the vertical offset so the sidenote aligns with
+	 * the specific line where the reference appears, not the top of the paragraph.
+	 */
+	private applyLineOffset(
+		wrapper: HTMLElement,
+		margin: HTMLElement,
+		isEditingMode: boolean = false,
+	) {
+		if (isEditingMode) {
+			// In editing mode, sidenotes are inside .cm-line which already has position: relative
+			// The wrapper is inline within the line, so we need to find the offset within the line
+			const line = wrapper.closest(".cm-line") as HTMLElement | null;
+			if (!line) return;
+
+			// Get positions
+			const wrapperRect = wrapper.getBoundingClientRect();
+			const lineRect = line.getBoundingClientRect();
+
+			// The offset is how far down the wrapper is from the top of the line
+			// For single-line content this is ~0, for wrapped text it could be more
+			const lineOffset = wrapperRect.top - lineRect.top;
+
+			margin.style.setProperty(
+				"--sidenote-line-offset",
+				`${lineOffset}px`,
+			);
+		} else {
+			// Reading mode: find the positioned ancestor (p, li, etc.)
+			const positionedParent = wrapper.offsetParent as HTMLElement | null;
+			if (!positionedParent) return;
+
+			// Get the wrapper's position relative to its offset parent
+			const wrapperRect = wrapper.getBoundingClientRect();
+			const parentRect = positionedParent.getBoundingClientRect();
+
+			// Calculate the offset from the top of the parent to the wrapper
+			const lineOffset = wrapperRect.top - parentRect.top;
+
+			margin.style.setProperty(
+				"--sidenote-line-offset",
+				`${lineOffset}px`,
+			);
+		}
 	}
 
 	/**
@@ -2346,6 +2398,9 @@ export default class SidenotePlugin extends Plugin {
 					item.el.parentNode?.insertBefore(wrapper, item.el);
 					wrapper.appendChild(item.el);
 					wrapper.appendChild(margin);
+
+					// Calculate line offset for this sidenote (editing mode)
+					this.applyLineOffset(wrapper, margin, true);
 
 					this.observeSidenoteVisibility(margin);
 				}
@@ -3438,27 +3493,34 @@ class FootnoteSidenoteWidget extends WidgetType {
 		margin.className = "sidenote-margin";
 		margin.dataset.sidenoteNum = this.numberText;
 		margin.style.setProperty("--sidenote-shift", "0px");
+		margin.style.setProperty("--sidenote-line-offset", "0px");
 
-		if (this.content.trim()) {
-			// Render the content with markdown formatting support
-			const fragment = this.plugin.renderLinksToFragmentPublic(
-				this.plugin.normalizeTextPublic(this.content),
-			);
-			margin.appendChild(fragment);
-		} else {
-			// if this.content is empty...
-			margin.textContent = "(empty)";
-			margin.style.opacity = "0.5";
-		}
+		// Render the content with markdown formatting support
+		const fragment = this.plugin.renderLinksToFragmentPublic(
+			this.plugin.normalizeTextPublic(this.content),
+		);
+		margin.appendChild(fragment);
 
 		// Set up editing for the margin
 		this.setupMarginEditing(margin);
 
 		wrapper.appendChild(margin);
 
-		// After the widget is attached to the DOM, trigger collision avoidance
+		// After the widget is attached to the DOM, calculate line offset and trigger collision avoidance
 		requestAnimationFrame(() => {
 			if (wrapper.isConnected) {
+				// Calculate line offset within the .cm-line
+				const line = wrapper.closest(".cm-line") as HTMLElement | null;
+				if (line) {
+					const wrapperRect = wrapper.getBoundingClientRect();
+					const lineRect = line.getBoundingClientRect();
+					const lineOffset = wrapperRect.top - lineRect.top;
+					margin.style.setProperty(
+						"--sidenote-line-offset",
+						`${lineOffset}px`,
+					);
+				}
+
 				this.plugin.scheduleEditingModeCollisionUpdate();
 			}
 		});
