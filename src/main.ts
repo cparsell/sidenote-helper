@@ -1163,33 +1163,32 @@ export default class SidenotePlugin extends Plugin {
 	${neumorphicStyles}
 	${pillStyles}
 
-			/* Hide footnotes section when using footnote formats */
-			${
-				this.settings.sidenoteFormat === "footnote" ||
-				this.settings.sidenoteFormat === "footnote-edit"
-					? `
-			.markdown-reading-view[data-has-sidenotes="true"][data-sidenote-mode="normal"] section.footnotes,
-			.markdown-reading-view[data-has-sidenotes="true"][data-sidenote-mode="compact"] section.footnotes,
-			.markdown-reading-view[data-has-sidenotes="true"][data-sidenote-mode="full"] section.footnotes {
-				display: none;
-			}
-
-			/* Hide the original footnote number text when converted to sidenote */
-			.sidenote-number sup.footnote-ref a.footnote-link {
-				display: none;
-			}
-			`
-					: ""
-			}
-
-			/* Hide footnote definitions in editing mode when using footnote-edit */
+			/* Footnote-edit mode styles */
 			${
 				this.settings.sidenoteFormat === "footnote-edit"
 					? `
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="normal"] .cm-line.HyperMD-footnote,
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="compact"] .cm-line.HyperMD-footnote,
-			.markdown-source-view.mod-cm6[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
+			/* === LIVE PREVIEW MODE === */
+			/* Hide footnote definitions - only in Live Preview */
+			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="normal"] .cm-line.HyperMD-footnote,
+			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="compact"] .cm-line.HyperMD-footnote,
+			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
 				display: none;
+			}
+
+			/* Hide original [^1] reference - only in Live Preview */
+			.markdown-source-view.mod-cm6.is-live-preview .cm-line:has(.sidenote-number[data-footnote-id]) .cm-footref {
+				display: none;
+			}
+
+			/* === SOURCE MODE === */
+			/* Hide sidenote widgets in Source mode - show raw markdown */
+			.markdown-source-view.mod-cm6:not(.is-live-preview) .sidenote-number[data-footnote-id] {
+				display: none;
+			}
+
+			/* Show the footnote reference in Source mode */
+			.markdown-source-view.mod-cm6:not(.is-live-preview) .cm-footref {
+				display: inline !important;
 			}
 			`
 					: ""
@@ -1218,17 +1217,6 @@ export default class SidenotePlugin extends Plugin {
 				z-index: 10;
 				pointer-events: auto;
 				${transitionRule}
-			}
-
-			/* Hide original footnote reference when converted to sidenote in editing mode */
-			${
-				this.settings.sidenoteFormat === "footnote-edit"
-					? `
-			.cm-line:has(.sidenote-number[data-footnote-id]) .cm-footref {
-				display: none;
-			}
-			`
-					: ""
 			}
 `;
 
@@ -2144,11 +2132,9 @@ export default class SidenotePlugin extends Plugin {
 		const content = editor.getValue();
 
 		if (this.settings.sidenoteFormat === "html") {
-			// Check for HTML sidenotes only
 			this.documentHasSidenotes = SIDENOTE_PATTERN.test(content);
 			SIDENOTE_PATTERN.lastIndex = 0;
 		} else {
-			// Check for footnotes (both "footnote" and "footnote-edit" modes)
 			this.documentHasSidenotes = /\[\^[^\]]+\](?!:)/.test(content);
 		}
 
@@ -2157,22 +2143,27 @@ export default class SidenotePlugin extends Plugin {
 			this.totalSidenotesInDocument = this.countSidenotesInSource(content);
 		}
 
-		if (this.cmRoot) {
-			// In editing mode: HTML sidenotes always work
-			// Footnotes only work in footnote-edit mode
+		// Check if we're in Source mode
+		const cmRoot = this.cmRoot;
+		const isSourceMode =
+			cmRoot && !cmRoot.classList.contains("is-live-preview");
+
+		if (cmRoot) {
 			let editingHasSidenotes = false;
 
 			if (this.settings.sidenoteFormat === "html") {
 				editingHasSidenotes = SIDENOTE_PATTERN.test(content);
 				SIDENOTE_PATTERN.lastIndex = 0;
-			} else if (this.settings.sidenoteFormat === "footnote-edit") {
+			} else if (
+				this.settings.sidenoteFormat === "footnote-edit" &&
+				!isSourceMode
+			) {
+				// Only show sidenotes in Live Preview, not Source mode
 				editingHasSidenotes = /\[\^[^\]]+\](?!:)/.test(content);
 			}
-			// For "footnote" mode, editing has no sidenotes (reading-mode only)
+			// For "footnote" mode or "footnote-edit" in Source mode, editing has no sidenotes
 
-			this.cmRoot.dataset.hasSidenotes = editingHasSidenotes
-				? "true"
-				: "false";
+			cmRoot.dataset.hasSidenotes = editingHasSidenotes ? "true" : "false";
 		}
 
 		const readingRoot = view.containerEl.querySelector<HTMLElement>(
@@ -2389,6 +2380,26 @@ export default class SidenotePlugin extends Plugin {
 			});
 			this.cleanups.push(() => mo.disconnect());
 		}
+
+		// Watch for Live Preview / Source mode toggle on cmRoot
+		const modeMo = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				if (
+					mutation.type === "attributes" &&
+					mutation.attributeName === "class"
+				) {
+					// View mode changed, reschedule layout
+					this.invalidateLayoutCache();
+					this.scheduleLayout();
+					break;
+				}
+			}
+		});
+		modeMo.observe(cmRoot, {
+			attributes: true,
+			attributeFilter: ["class"],
+		});
+		this.cleanups.push(() => modeMo.disconnect());
 	}
 
 	// ==================== Document Position ====================
@@ -2445,9 +2456,19 @@ export default class SidenotePlugin extends Plugin {
 		const scaleFactor = this.calculateScaleFactor(editorWidth);
 		cmRoot.style.setProperty("--sidenote-scale", scaleFactor.toFixed(3));
 
+		// Check if we're in Source mode (not Live Preview)
+		const isSourceMode = !cmRoot.classList.contains("is-live-preview");
+
 		// Determine if we should process sidenotes in editing mode
+		const processHtmlSidenotes = this.settings.sidenoteFormat === "html";
 		const processFootnoteSidenotes =
-			this.settings.sidenoteFormat === "footnote-edit";
+			this.settings.sidenoteFormat === "footnote-edit" && !isSourceMode;
+
+		// For footnote-edit mode in Source view, don't show sidenotes
+		if (this.settings.sidenoteFormat === "footnote-edit" && isSourceMode) {
+			cmRoot.dataset.hasSidenotes = "false";
+			return;
+		}
 
 		// For footnote-edit mode, the CM6 widget handles the sidenotes
 		// We just need to set the data attributes and run collision avoidance
