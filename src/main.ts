@@ -70,7 +70,7 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 	sidenoteGap: 2,
 	sidenoteGap2: 1,
 	sidenoteAnchor: "text",
-	pageOffsetFactor: 0.6,
+	pageOffsetFactor: 0,
 
 	// Breakpoints
 	hideBelow: 700,
@@ -1172,7 +1172,7 @@ export default class SidenotePlugin extends Plugin {
 			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="normal"] .cm-line.HyperMD-footnote,
 			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="compact"] .cm-line.HyperMD-footnote,
 			.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
-				display: none;
+				/* display: none; */
 			}
 
 			/* Hide original [^1] reference - only in Live Preview */
@@ -3471,11 +3471,11 @@ class SidenoteSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Page Offset Factor")
 			.setDesc(
-				"Adjusts how much body text gets nudged over - only affects notes with sidenotes (default: 0.5)",
+				"Adjusts how much body text gets nudged over when sidenotes are present (default: 0)",
 			)
 			.addSlider((slider) =>
 				slider
-					.setLimits(0.1, 1, 0.1)
+					.setLimits(0, 1, 0.1)
 					.setValue(this.plugin.settings.pageOffsetFactor)
 					.setDynamicTooltip()
 					.onChange(async (value) => {
