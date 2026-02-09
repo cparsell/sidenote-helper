@@ -21,6 +21,10 @@ type CleanupFn = () => void;
 // Settings interface
 // Settings interface
 interface SidenoteSettings {
+	// Source format
+	sidenoteFormat: "html" | "footnote" | "footnote-edit";
+	hideFootnotes: boolean;
+
 	// Display
 	sidenotePosition: "left" | "right";
 	showSidenoteNumbers: boolean;
@@ -51,12 +55,13 @@ interface SidenoteSettings {
 	collisionSpacing: number;
 	enableTransitions: boolean;
 	resetNumberingPerHeading: boolean;
-
-	// Source format
-	sidenoteFormat: "html" | "footnote" | "footnote-edit";
 }
 
 const DEFAULT_SETTINGS: SidenoteSettings = {
+	// Source format
+	sidenoteFormat: "html",
+	hideFootnotes: false,
+
 	// Display
 	sidenotePosition: "left",
 	showSidenoteNumbers: true,
@@ -87,9 +92,6 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 	collisionSpacing: 8,
 	enableTransitions: true,
 	resetNumberingPerHeading: false,
-
-	// Source format
-	sidenoteFormat: "html",
 };
 
 // Regex to detect sidenote spans in source text
@@ -1187,14 +1189,15 @@ export default class SidenotePlugin extends Plugin {
 
 					/* Footnote-edit mode styles */
 					${
-						this.settings.sidenoteFormat === "footnote-edit"
+						this.settings.sidenoteFormat === "footnote-edit" &&
+						this.settings.hideFootnotes
 							? `
 					/* === LIVE PREVIEW MODE === */
 					/* Hide footnote definitions - only in Live Preview */
 					.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="normal"] .cm-line.HyperMD-footnote,
 					.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="compact"] .cm-line.HyperMD-footnote,
 					.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
-						/* display: none; */
+						display: none; 
 					}
 
 					/* Hide original [^1] reference - only in Live Preview */
@@ -3925,6 +3928,42 @@ class SidenoteSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		containerEl.createEl("h2", { text: "Sidenote Format" });
+		new Setting(containerEl)
+			.setName("Sidenote format")
+			.setDesc("Choose how sidenotes are written in your documents")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption(
+						"html",
+						'HTML spans: <span class="sidenote">text</span>',
+					)
+					//.addOption("footnote", "Footnotes (reading mode only)")
+					.addOption(
+						"footnote-edit",
+						"Footnotes (reading + editing mode) [experimental]",
+					)
+					.setValue(this.plugin.settings.sidenoteFormat)
+					.onChange(async (value: "html" | "footnote-edit") => {
+						this.plugin.settings.sidenoteFormat = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Hide footnotes")
+			.setDesc(
+				"Hides the footnotes at the bottom of the document (only relevant if using footnote format)",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.hideFootnotes)
+					.onChange(async (value) => {
+						this.plugin.settings.hideFootnotes = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
 		containerEl.createEl("h2", { text: "Display" });
 
 		new Setting(containerEl)
@@ -3997,29 +4036,6 @@ class SidenoteSettingTab extends PluginSettingTab {
 						this.plugin.settings.numberColor = value.trim();
 						await this.plugin.saveSettings();
 					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Sidenote format")
-			.setDesc("Choose how sidenotes are written in your documents")
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption(
-						"html",
-						'HTML spans: <span class="sidenote">text</span>',
-					)
-					.addOption("footnote", "Footnotes (reading mode only)")
-					.addOption(
-						"footnote-edit",
-						"Footnotes (reading + editing mode) [experimental]",
-					)
-					.setValue(this.plugin.settings.sidenoteFormat)
-					.onChange(
-						async (value: "html" | "footnote" | "footnote-edit") => {
-							this.plugin.settings.sidenoteFormat = value;
-							await this.plugin.saveSettings();
-						},
-					),
 			);
 
 		containerEl.createEl("h2", { text: "Width & Spacing" });
