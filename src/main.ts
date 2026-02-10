@@ -1807,8 +1807,31 @@ export default class SidenotePlugin extends Plugin {
 
 		margin.dataset.editing = "true";
 
-		// Get the current content
-		const currentText = margin.textContent ?? "";
+		// Get the raw markdown text from the source document, not from the rendered HTML
+		let currentText = margin.textContent ?? "";
+
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (view?.editor) {
+			const content = view.editor.getValue();
+
+			// Extract the actual footnote identifier
+			let actualId = footnoteId;
+			const fnHashMatch = footnoteId.match(/^fn-(.+?)-[a-f0-9]+$/i);
+			if (fnHashMatch && fnHashMatch[1]) {
+				actualId = fnHashMatch[1];
+			} else {
+				const fnMatch = footnoteId.match(/^fn-(.+)$/i);
+				if (fnMatch && fnMatch[1]) {
+					actualId = fnMatch[1];
+				}
+			}
+
+			const definitions = this.parseFootnoteDefinitions(content);
+			const sourceText = definitions.get(actualId);
+			if (sourceText) {
+				currentText = sourceText;
+			}
+		}
 
 		// Clear margin and make it editable
 		margin.innerHTML = "";
