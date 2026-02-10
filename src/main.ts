@@ -154,13 +154,16 @@ export default class SidenotePlugin extends Plugin {
 
 	private activeEditingMargin: HTMLElement | null = null;
 
+	// Track the currently editing margin element for the global capture listener
+	private currentlyEditingMargin: HTMLElement | null = null;
+
 	// Track which footnote is being edited (by footnote ID)
 	private activeFootnoteEdit: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
 
-		this.debugHotkeys();
+		// this.debugHotkeys();
 
 		this.addSettingTab(new SidenoteSettingTab(this.app, this));
 		this.injectStyles();
@@ -352,6 +355,7 @@ export default class SidenotePlugin extends Plugin {
 		// Clear pending edit
 		this.pendingFootnoteEdit = null;
 		this.pendingFootnoteEditRetries = 0;
+		this.currentlyEditingMargin = null;
 
 		// Clear active footnote edit
 		this.activeFootnoteEdit = null;
@@ -420,6 +424,14 @@ export default class SidenotePlugin extends Plugin {
 
 	public isFootnoteBeingEdited(): boolean {
 		return this.activeFootnoteEdit !== null;
+	}
+
+	public setCurrentlyEditingMargin(margin: HTMLElement | null) {
+		this.currentlyEditingMargin = margin;
+	}
+
+	public getCurrentlyEditingMargin(): HTMLElement | null {
+		return this.currentlyEditingMargin;
 	}
 
 	private cleanupView(view: MarkdownView | null) {
@@ -1808,24 +1820,11 @@ export default class SidenotePlugin extends Plugin {
 			selection?.addRange(range);
 		}
 
-		// Set up capture-phase listeners for formatting shortcuts
-		const cleanupCapture = this.setupMarginKeyboardCapture(
-			margin,
-			() => {
-				// onEscape
-				margin.dataset.editing = "false";
-				margin.contentEditable = "false";
-				margin.innerHTML = "";
-				margin.appendChild(
-					this.renderLinksToFragment(this.normalizeText(currentText)),
-				);
-				cleanupCapture();
-				margin.removeEventListener("blur", onBlur);
-				margin.removeEventListener("keyup", onKeyUp);
-				margin.removeEventListener("keypress", onKeyPress);
-			},
-			() => margin.blur(), // onEnter
-		);
+		// Track this as the currently editing margin
+		this.setCurrentlyEditingMargin(margin);
+
+		// Set up capture-phase listener that blocks all keys from reaching CM6
+		const cleanupCapture = this.setupMarginKeyboardCapture(margin);
 
 		const onKeyUp = (e: KeyboardEvent) => {
 			e.stopPropagation();
@@ -1839,7 +1838,20 @@ export default class SidenotePlugin extends Plugin {
 
 		const onBlur = () => {
 			cleanupCapture();
-			this.finishReadingModeMarginEdit(margin, footnoteId, currentText);
+			this.setCurrentlyEditingMargin(null);
+
+			if (margin.dataset.cancelled === "true") {
+				// Escape was pressed - restore original
+				margin.dataset.cancelled = "";
+				margin.dataset.editing = "false";
+				margin.contentEditable = "false";
+				margin.innerHTML = "";
+				margin.appendChild(
+					this.renderLinksToFragment(this.normalizeText(currentText)),
+				);
+			} else {
+				this.finishReadingModeMarginEdit(margin, footnoteId, currentText);
+			}
 			margin.removeEventListener("blur", onBlur);
 			margin.removeEventListener("keyup", onKeyUp);
 			margin.removeEventListener("keypress", onKeyPress);
@@ -3107,26 +3119,11 @@ export default class SidenotePlugin extends Plugin {
 			selection?.addRange(range);
 		}
 
-		// Set up capture-phase listeners for formatting shortcuts
-		const cleanupCapture = this.setupMarginKeyboardCapture(
-			margin,
-			() => {
-				// onEscape - restore original content
-				margin.dataset.editing = "false";
-				margin.contentEditable = "false";
-				margin.innerHTML = "";
-				margin.appendChild(
-					this.renderLinksToFragment(
-						this.normalizeText(sourceSpan.textContent ?? ""),
-					),
-				);
-				cleanupCapture();
-				margin.removeEventListener("blur", onBlur);
-				margin.removeEventListener("keyup", onKeyUp);
-				margin.removeEventListener("keypress", onKeyPress);
-			},
-			() => margin.blur(), // onEnter
-		);
+		// Track this as the currently editing margin
+		this.setCurrentlyEditingMargin(margin);
+
+		// Set up capture-phase listener that blocks all keys from reaching CM6
+		const cleanupCapture = this.setupMarginKeyboardCapture(margin);
 
 		const onKeyUp = (e: KeyboardEvent) => {
 			e.stopPropagation();
@@ -3141,7 +3138,22 @@ export default class SidenotePlugin extends Plugin {
 		// Handle blur (save changes)
 		const onBlur = () => {
 			cleanupCapture();
-			this.finishMarginEdit(margin, sourceSpan, sidenoteIndex);
+			this.setCurrentlyEditingMargin(null);
+
+			if (margin.dataset.cancelled === "true") {
+				// Escape was pressed - restore original content
+				margin.dataset.cancelled = "";
+				margin.dataset.editing = "false";
+				margin.contentEditable = "false";
+				margin.innerHTML = "";
+				margin.appendChild(
+					this.renderLinksToFragment(
+						this.normalizeText(sourceSpan.textContent ?? ""),
+					),
+				);
+			} else {
+				this.finishMarginEdit(margin, sourceSpan, sidenoteIndex);
+			}
 			margin.removeEventListener("blur", onBlur);
 			margin.removeEventListener("keyup", onKeyUp);
 			margin.removeEventListener("keypress", onKeyPress);
@@ -3624,6 +3636,197 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	/**
+	 * Insert markdown wrapper (like ** for bold, * for italic) around the
+	 * current selection in a contentEditable element, or at cursor if no selection.
+	 * Uses manual text manipulation to maintain plain-text editing.
+	 */
+	private insertMarkdownWrapper(element: HTMLElement, wrapper: string) {
+		const selection = window.getSelection();
+		if (!selection || selection.rangeCount === 0) return;
+
+		const range = selection.getRangeAt(0);
+		if (
+			!element.contains(range.startContainer) ||
+			!element.contains(range.endContainer)
+		)
+			return;
+
+		const fullText = element.textContent || "";
+
+		// Calculate offsets within the full text
+		const offsets = this.getSelectionOffsets(element, range);
+		if (!offsets) return;
+
+		const { start, end } = offsets;
+		const selectedText = fullText.slice(start, end);
+
+		let newText: string;
+		let cursorStart: number;
+		let cursorEnd: number;
+
+		if (selectedText) {
+			// Wrap selection
+			newText =
+				fullText.slice(0, start) +
+				wrapper +
+				selectedText +
+				wrapper +
+				fullText.slice(end);
+			cursorStart = start + wrapper.length;
+			cursorEnd = cursorStart + selectedText.length;
+		} else {
+			// Insert wrapper pair at cursor
+			newText =
+				fullText.slice(0, start) + wrapper + wrapper + fullText.slice(end);
+			cursorStart = start + wrapper.length;
+			cursorEnd = cursorStart;
+		}
+
+		element.textContent = newText;
+
+		// Restore cursor
+		requestAnimationFrame(() => {
+			element.focus();
+			const sel = window.getSelection();
+			if (!sel || !element.firstChild) return;
+			try {
+				const newRange = document.createRange();
+				newRange.setStart(
+					element.firstChild,
+					Math.min(cursorStart, newText.length),
+				);
+				newRange.setEnd(
+					element.firstChild,
+					Math.min(cursorEnd, newText.length),
+				);
+				sel.removeAllRanges();
+				sel.addRange(newRange);
+			} catch (e) {
+				// Fallback
+			}
+		});
+	}
+
+	/**
+	 * Insert a markdown link at the current cursor/selection in a contentEditable element.
+	 */
+	private insertMarkdownLink(element: HTMLElement) {
+		const selection = window.getSelection();
+		if (!selection || selection.rangeCount === 0) return;
+
+		const range = selection.getRangeAt(0);
+		if (
+			!element.contains(range.startContainer) ||
+			!element.contains(range.endContainer)
+		)
+			return;
+
+		const fullText = element.textContent || "";
+		const offsets = this.getSelectionOffsets(element, range);
+		if (!offsets) return;
+
+		const { start, end } = offsets;
+		const selectedText = fullText.slice(start, end);
+
+		const linkText = selectedText || "link text";
+		const replacement = `[${linkText}](url)`;
+
+		const newText =
+			fullText.slice(0, start) + replacement + fullText.slice(end);
+
+		// Position cursor to select "url"
+		const urlStart = start + 1 + linkText.length + 2; // [linkText](
+		const urlEnd = urlStart + 3; // url
+
+		element.textContent = newText;
+
+		requestAnimationFrame(() => {
+			element.focus();
+			const sel = window.getSelection();
+			if (!sel || !element.firstChild) return;
+			try {
+				const newRange = document.createRange();
+				newRange.setStart(
+					element.firstChild,
+					Math.min(urlStart, newText.length),
+				);
+				newRange.setEnd(
+					element.firstChild,
+					Math.min(urlEnd, newText.length),
+				);
+				sel.removeAllRanges();
+				sel.addRange(newRange);
+			} catch (e) {
+				// Fallback
+			}
+		});
+	}
+
+	/**
+	 * Get the start and end character offsets of the current selection
+	 * within a contentEditable element's text content.
+	 */
+	private getSelectionOffsets(
+		element: HTMLElement,
+		range: Range,
+	): { start: number; end: number } | null {
+		const walker = document.createTreeWalker(
+			element,
+			NodeFilter.SHOW_TEXT,
+			null,
+		);
+		let currentOffset = 0;
+		let startOffset = 0;
+		let endOffset = 0;
+		let foundStart = false;
+		let foundEnd = false;
+		let node: Text | null;
+
+		while ((node = walker.nextNode() as Text | null)) {
+			const nodeLength = node.textContent?.length || 0;
+
+			if (!foundStart && node === range.startContainer) {
+				startOffset = currentOffset + range.startOffset;
+				foundStart = true;
+			}
+			if (!foundEnd && node === range.endContainer) {
+				endOffset = currentOffset + range.endOffset;
+				foundEnd = true;
+			}
+
+			if (foundStart && foundEnd) break;
+			currentOffset += nodeLength;
+		}
+
+		// Handle case where container is the element itself
+		if (!foundStart && range.startContainer === element) {
+			startOffset = 0;
+			for (
+				let i = 0;
+				i < range.startOffset && i < element.childNodes.length;
+				i++
+			) {
+				startOffset += element.childNodes[i]?.textContent?.length ?? 0;
+			}
+			foundStart = true;
+		}
+		if (!foundEnd && range.endContainer === element) {
+			endOffset = 0;
+			for (
+				let i = 0;
+				i < range.endOffset && i < element.childNodes.length;
+				i++
+			) {
+				endOffset += element.childNodes[i]?.textContent?.length ?? 0;
+			}
+			foundEnd = true;
+		}
+
+		if (!foundStart || !foundEnd) return null;
+		return { start: startOffset, end: endOffset };
+	}
+
+	/**
 	 * Debug: Explore Obsidian's hotkey system
 	 */
 	private debugHotkeys() {
@@ -3667,130 +3870,88 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	/**
-	 * Check if a keyboard event matches an Obsidian hotkey for a given command.
+	 * Set up keyboard interception that prevents CM6 from seeing ANY key events
+	 * while a margin is being edited.
+	 *
+	 * We attach a capture-phase listener on the .cm-editor element itself
+	 * and call stopImmediatePropagation to prevent CM6's own handlers from firing.
+	 * We also attach on document as a fallback for reading mode (where there's no CM6).
+	 *
+	 * Returns a cleanup function.
 	 */
-	private matchesHotkey(e: KeyboardEvent, commandId: string): boolean {
-		// Access Obsidian's hotkey manager
-		const hotkeyManager = (this.app as any).hotkeyManager;
-		if (!hotkeyManager) return false;
+	private setupMarginKeyboardCapture(margin: HTMLElement): () => void {
+		this.setCurrentlyEditingMargin(margin);
 
-		// Get hotkeys for this command
-		console.log("event", e);
-		const hotkeys = hotkeyManager.getHotkeys(commandId) || [];
-		const defaultHotkeys =
-			hotkeyManager.getDefaultHotkeys(commandId) || [];
-		const allHotkeys = [...hotkeys, ...defaultHotkeys];
+		const handler = (e: KeyboardEvent) => {
+			if (margin.contentEditable !== "true") return;
+			if (
+				document.activeElement !== margin &&
+				!margin.contains(document.activeElement)
+			)
+				return;
 
-		for (const hotkey of allHotkeys) {
-			if (!hotkey) continue;
+			const isMod = e.metaKey || e.ctrlKey;
 
-			const modifiers = hotkey.modifiers || [];
-			const key = hotkey.key;
-			console.log(key);
+			if (e.key === "Escape") {
+				e.preventDefault();
+				e.stopImmediatePropagation();
+				margin.dataset.cancelled = "true";
+				margin.blur();
+				return;
+			}
 
-			// Check if modifiers match
-			const needsCtrl = modifiers.includes("Ctrl");
-			const needsMeta =
-				modifiers.includes("Meta") || modifiers.includes("Mod");
-			const needsAlt = modifiers.includes("Alt");
-			const needsShift = modifiers.includes("Shift");
-
-			// On Mac, "Mod" means Meta (Cmd), on Windows/Linux it means Ctrl
-			const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
-			const modPressed = isMac ? e.metaKey : e.ctrlKey;
-
-			const ctrlMatch = needsCtrl
-				? e.ctrlKey
-				: !e.ctrlKey || (needsMeta && !isMac);
-			const metaMatch = needsMeta
-				? modPressed
-				: !e.metaKey || (needsCtrl && isMac);
-			const altMatch = needsAlt === e.altKey;
-			const shiftMatch = needsShift === e.shiftKey;
-
-			// Check key match
-			const keyMatch =
-				key?.toLowerCase() === e.key?.toLowerCase() ||
-				key?.toLowerCase() === e.code?.toLowerCase()?.replace("key", "");
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				e.stopImmediatePropagation();
+				margin.blur();
+				return;
+			}
 
 			if (
-				keyMatch &&
-				altMatch &&
-				shiftMatch &&
-				(modPressed || (needsCtrl && e.ctrlKey))
+				isMod &&
+				e.key.toLowerCase() === "b" &&
+				!e.shiftKey &&
+				!e.altKey
 			) {
-				console.log("MATCHES hotkey");
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Set up capture-phase keyboard listeners for margin editing.
-	 */
-	private setupMarginKeyboardCapture(
-		margin: HTMLElement,
-		onEscape: () => void,
-		onEnter: () => void,
-	): () => void {
-		const onKeyDown = (e: KeyboardEvent) => {
-			console.log(
-				"onKeyDown fired:",
-				e.key,
-				e.code,
-				"activeElement:",
-				document.activeElement,
-				"margin:",
-				margin,
-				"contentEditable:",
-				margin.contentEditable,
-			);
-
-			// Only handle if this margin is being edited
-			if (margin.contentEditable !== "true") {
-				console.log("Skipping - not contentEditable");
-				return;
-			}
-			if (document.activeElement !== margin) {
-				console.log("Skipping - not activeElement");
-				return;
-			}
-
-			console.log("Processing key event");
-
-			// Check for Obsidian's formatting hotkeys
-			if (this.matchesHotkey(e, "editor:toggle-bold")) {
-				console.log("BOLD detected");
+				console.log("BOLD shortcut detected");
 				e.preventDefault();
-				e.stopPropagation();
 				e.stopImmediatePropagation();
-				this.applyMarkdownFormatting(margin, "**");
+				this.insertMarkdownWrapper(margin, "**");
 				return;
 			}
 
-			if (this.matchesHotkey(e, "editor:toggle-italics")) {
+			if (
+				isMod &&
+				e.key.toLowerCase() === "i" &&
+				!e.shiftKey &&
+				!e.altKey
+			) {
+				console.log("ITALICS shortcut detected");
 				e.preventDefault();
-				e.stopPropagation();
 				e.stopImmediatePropagation();
-				this.applyMarkdownFormatting(margin, "*");
+				this.insertMarkdownWrapper(margin, "*");
 				return;
 			}
 
-			if (this.matchesHotkey(e, "editor:insert-link")) {
+			if (
+				isMod &&
+				e.key.toLowerCase() === "k" &&
+				!e.shiftKey &&
+				!e.altKey
+			) {
 				e.preventDefault();
-				e.stopPropagation();
 				e.stopImmediatePropagation();
-				this.applyMarkdownFormatting(margin, "", "", true);
+				this.insertMarkdownLink(margin);
 				return;
 			}
 
-			// Check for select all
-			const isMod = e.ctrlKey || e.metaKey;
-			if (isMod && e.code?.toLowerCase() === "keya") {
+			if (
+				isMod &&
+				e.key.toLowerCase() === "a" &&
+				!e.shiftKey &&
+				!e.altKey
+			) {
 				e.preventDefault();
-				e.stopPropagation();
 				e.stopImmediatePropagation();
 				const selection = window.getSelection();
 				const range = document.createRange();
@@ -3800,34 +3961,18 @@ export default class SidenotePlugin extends Plugin {
 				return;
 			}
 
-			// Handle Enter
-			if (e.key === "Enter" && !e.shiftKey) {
-				e.preventDefault();
-				e.stopPropagation();
+			if (isMod && e.key.toLowerCase() === "z") {
 				e.stopImmediatePropagation();
-				onEnter();
 				return;
 			}
 
-			// Handle Escape
-			if (e.key === "Escape") {
-				e.preventDefault();
-				e.stopPropagation();
-				e.stopImmediatePropagation();
-				onEscape();
-				return;
-			}
-
-			// Handle arrow keys - prevent cursor from leaving the margin
 			if (
 				["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
 			) {
-				e.stopPropagation();
 				e.stopImmediatePropagation();
 
 				const selection = window.getSelection();
 				if (!selection || selection.rangeCount === 0) return;
-
 				const range = selection.getRangeAt(0);
 
 				const atStart =
@@ -3841,10 +3986,9 @@ export default class SidenotePlugin extends Plugin {
 					if (range.startContainer === margin) {
 						atEnd = range.startOffset === margin.childNodes.length;
 					} else if (range.startContainer.nodeType === Node.TEXT_NODE) {
-						const containerLength =
-							range.startContainer.textContent?.length ?? 0;
+						const len = range.startContainer.textContent?.length ?? 0;
 						atEnd =
-							range.startOffset === containerLength &&
+							range.startOffset === len &&
 							(range.startContainer === margin.lastChild ||
 								range.startContainer.parentNode === margin);
 					}
@@ -3862,53 +4006,43 @@ export default class SidenotePlugin extends Plugin {
 				if (e.key === "ArrowUp" || e.key === "ArrowDown") {
 					const cursorRect = range.getBoundingClientRect();
 					const marginRect = margin.getBoundingClientRect();
-					const lineHeight =
-						parseFloat(getComputedStyle(margin).lineHeight) || 20;
-
+					const lh = parseFloat(getComputedStyle(margin).lineHeight) || 20;
 					if (
 						e.key === "ArrowUp" &&
-						cursorRect.top - marginRect.top < lineHeight
+						cursorRect.top - marginRect.top < lh
 					) {
 						e.preventDefault();
 						return;
 					}
-
 					if (
 						e.key === "ArrowDown" &&
-						marginRect.bottom - cursorRect.bottom < lineHeight
+						marginRect.bottom - cursorRect.bottom < lh
 					) {
 						e.preventDefault();
 						return;
 					}
 				}
+				return;
 			}
 
-			// Stop all key events from bubbling while editing
-			e.stopPropagation();
+			// Block ALL other keys from reaching Obsidian/CM6
 			e.stopImmediatePropagation();
 		};
 
-		// Listen on margin in capture phase
-		margin.addEventListener("keydown", onKeyDown, true);
-
-		// Also listen on document in capture phase as fallback
-		document.addEventListener("keydown", onKeyDown, true);
+		// CRITICAL: Attach to window (not document, not cm-editor) in capture phase.
+		// Capture flows: window → document → ... → element.
+		// Obsidian's hotkey system registers on document, so window fires first.
+		window.addEventListener("keydown", handler, true);
 
 		return () => {
-			margin.removeEventListener("keydown", onKeyDown, true);
-			document.removeEventListener("keydown", onKeyDown, true);
+			window.removeEventListener("keydown", handler, true);
+			this.setCurrentlyEditingMargin(null);
 		};
 	}
-
-	/**
-	 * Public version for widget to use.
-	 */
 	public setupMarginKeyboardCapturePublic(
 		margin: HTMLElement,
-		onEscape: () => void,
-		onEnter: () => void,
 	): () => void {
-		return this.setupMarginKeyboardCapture(margin, onEscape, onEnter);
+		return this.setupMarginKeyboardCapture(margin);
 	}
 }
 
@@ -4485,11 +4619,8 @@ class FootnoteSidenoteWidget extends WidgetType {
 
 	private attachEditingListeners(margin: HTMLElement) {
 		// Set up capture-phase listeners for formatting shortcuts
-		const cleanupCapture = this.plugin.setupMarginKeyboardCapturePublic(
-			margin,
-			() => this.cancelEdit(margin), // onEscape
-			() => margin.blur(), // onEnter
-		);
+		const cleanupCapture =
+			this.plugin.setupMarginKeyboardCapturePublic(margin);
 
 		const onKeyUp = (e: KeyboardEvent) => {
 			e.stopPropagation();
@@ -4503,7 +4634,12 @@ class FootnoteSidenoteWidget extends WidgetType {
 
 		const onBlur = () => {
 			cleanupCapture();
-			this.finishMarginEdit(margin);
+			if (margin.dataset.cancelled === "true") {
+				margin.dataset.cancelled = "";
+				this.cancelEdit(margin);
+			} else {
+				this.finishMarginEdit(margin);
+			}
 			margin.removeEventListener("blur", onBlur);
 			margin.removeEventListener("keyup", onKeyUp);
 			margin.removeEventListener("keypress", onKeyPress);
