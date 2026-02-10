@@ -24,6 +24,7 @@ interface SidenoteSettings {
 	// Source format
 	sidenoteFormat: "html" | "footnote" | "footnote-edit";
 	hideFootnotes: boolean;
+	hideFootnoteNumbers: boolean;
 
 	// Display
 	sidenotePosition: "left" | "right";
@@ -61,6 +62,7 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 	// Source format
 	sidenoteFormat: "html",
 	hideFootnotes: false,
+	hideFootnoteNumbers: true,
 
 	// Display
 	sidenotePosition: "left",
@@ -1211,21 +1213,16 @@ export default class SidenotePlugin extends Plugin {
 					.markdown-source-view.mod-cm6.is-live-preview[data-has-sidenotes="true"][data-sidenote-mode="full"] .cm-line.HyperMD-footnote {
 						display: none; 
 					}
-
+					`
+							: ""
+					}
+					${
+						this.settings.sidenoteFormat === "footnote-edit" &&
+						this.settings.hideFootnoteNumbers
+							? `
 					/* Hide original [^1] reference - only in Live Preview */
 					.markdown-source-view.mod-cm6.is-live-preview .cm-line:has(.sidenote-number[data-footnote-id]) .cm-footref {
 						display: none;
-					}
-
-					/* === SOURCE MODE === */
-					/* Hide sidenote widgets in Source mode - show raw markdown */
-					.markdown-source-view.mod-cm6:not(.is-live-preview) .sidenote-number[data-footnote-id] {
-						display: none;
-					}
-
-					/* Show the footnote reference in Source mode */
-					.markdown-source-view.mod-cm6:not(.is-live-preview) .cm-footref {
-						display: inline !important;
 					}
 					`
 							: ""
@@ -1254,6 +1251,17 @@ export default class SidenotePlugin extends Plugin {
 						z-index: 10;
 						pointer-events: auto;
 						${transitionRule}
+					}
+
+					/* === SOURCE MODE === */
+					/* Hide sidenote widgets in Source mode - show raw markdown */
+					.markdown-source-view.mod-cm6:not(.is-live-preview) .sidenote-number[data-footnote-id] {
+						/* display: none; */
+					}
+
+					/* Show the footnote reference in Source mode */
+					.markdown-source-view.mod-cm6:not(.is-live-preview) .cm-footref {
+						display: inline !important;
 					}
 		`;
 
@@ -1633,8 +1641,9 @@ export default class SidenotePlugin extends Plugin {
 				this.cloneContentToMargin(item.el, margin);
 			} else {
 				// For footnotes, hide the original [1] link inside the sup
+
 				const anchor = item.el.querySelector("a.footnote-link");
-				if (anchor) {
+				if (anchor && this.settings.hideFootnoteNumbers) {
 					(anchor as HTMLElement).style.display = "none";
 				}
 
@@ -4039,6 +4048,7 @@ export default class SidenotePlugin extends Plugin {
 			this.setCurrentlyEditingMargin(null);
 		};
 	}
+
 	public setupMarginKeyboardCapturePublic(
 		margin: HTMLElement,
 	): () => void {
@@ -4063,6 +4073,7 @@ class SidenoteSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		containerEl.createEl("h2", { text: "Sidenote Format" });
+
 		new Setting(containerEl)
 			.setName("Sidenote format")
 			.setDesc("Choose how sidenotes are written in your documents")
@@ -4084,6 +4095,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		containerEl.createEl("h2", { text: "If using Footnotes" });
+
 		new Setting(containerEl)
 			.setName("Hide footnotes")
 			.setDesc(
@@ -4094,6 +4107,20 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.hideFootnotes)
 					.onChange(async (value) => {
 						this.plugin.settings.hideFootnotes = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Hide footnote numbers in text")
+			.setDesc(
+				"Hides the Markdown style footnote reference numbers in the text body, and replaces with sidenote numbers only (only relevant if using footnote format)",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.hideFootnoteNumbers)
+					.onChange(async (value) => {
+						this.plugin.settings.hideFootnoteNumbers = value;
 						await this.plugin.saveSettings();
 					}),
 			);
