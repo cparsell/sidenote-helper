@@ -5,6 +5,7 @@ import {
 	Setting,
 	TFile,
 	App,
+	Editor,
 } from "obsidian";
 import {
 	EditorView,
@@ -13,12 +14,20 @@ import {
 	Decoration,
 	DecorationSet,
 	WidgetType,
+	keymap,
 } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 
+// CM6 building blocks for proper shortcuts + undo
+import {
+	defaultKeymap,
+	history,
+	historyKeymap,
+} from "@codemirror/commands";
+import { markdown } from "@codemirror/lang-markdown";
+
 type CleanupFn = () => void;
 
-// Settings interface
 // Settings interface
 interface SidenoteSettings {
 	// Source format
@@ -4485,6 +4494,50 @@ class SidenoteSettingTab extends PluginSettingTab {
 	}
 }
 
+function cmEditorAdapter(view: EditorView): Editor {
+	return {
+		getSelection() {
+			const sel = view.state.selection.main;
+			return view.state.sliceDoc(sel.from, sel.to);
+		},
+
+		replaceSelection(text: string) {
+			const sel = view.state.selection.main;
+			view.dispatch({
+				changes: { from: sel.from, to: sel.to, insert: text },
+			});
+		},
+
+		getCursor() {
+			// Obsidian Editor interface is CM5-ish; returning a number is tolerated by many commands,
+			// but some expect { line, ch }. We’ll handle only the common command path here.
+			// If you hit a command that requires line/ch, we can extend this adapter.
+			return view.state.selection.main.head as any;
+		},
+
+		setCursor(pos: any) {
+			const n = typeof pos === "number" ? pos : 0;
+			view.dispatch({ selection: { anchor: n } });
+		},
+	} as Editor;
+}
+
+function setWorkspaceActiveEditor(
+	plugin: SidenotePlugin,
+	view: EditorView | null,
+) {
+	const ws: any = plugin.app.workspace;
+	if (!view) {
+		ws.activeEditor = null;
+		return;
+	}
+
+	ws.activeEditor = {
+		editor: cmEditorAdapter(view),
+		file: plugin.app.workspace.getActiveFile(),
+	};
+}
+
 // ======================================================
 // ========CodeMirror 6 Footnote Sidenote Widget ========
 // ======================================================
@@ -4575,192 +4628,102 @@ class FootnoteSidenoteWidget extends WidgetType {
 		return wrapper;
 	}
 
+	private cmView: EditorView | null = null;
+
 	private setupMarginEditing(margin: HTMLElement) {
 		margin.dataset.editing = "false";
 
-		// Check if this footnote is already being edited (widget was recreated)
-		if (this.plugin.getActiveFootnoteEdit() === this.footnoteId) {
-			// Restore editing state
-			margin.dataset.editing = "true";
-			margin.contentEditable = "true";
-			margin.innerHTML = "";
-			margin.textContent = this.content;
-
-			// Re-setup event listeners
-			this.attachEditingListeners(margin);
-
-			// Set up click handlers that just handle cursor positioning (already editing)
-			margin.addEventListener("mousedown", (e: MouseEvent) => {
-				// Allow normal behavior for cursor positioning
-				e.stopPropagation();
-			});
-
-			margin.addEventListener("click", (e: MouseEvent) => {
-				e.stopPropagation();
-				// Cursor positioning is handled by the browser
-			});
-
-			// Focus and place cursor at end
-			requestAnimationFrame(() => {
-				margin.focus();
-			});
-			return;
-		}
-
 		const onMouseDown = (e: MouseEvent) => {
-			if (margin.contentEditable === "true") {
-				// Allow normal behavior but stop propagation to CM6
-				e.stopPropagation();
-				return;
-			}
+			// Stop propagation so CM6 main editor doesn't steal focus/click
 			e.stopPropagation();
-			e.preventDefault();
+			// Let click focus our margin editor
 		};
 
 		const onClick = (e: MouseEvent) => {
-			if (margin.contentEditable === "true") {
+			// If already editing, let CM handle cursor
+			if (this.cmView) {
 				e.stopPropagation();
 				return;
 			}
 
 			e.preventDefault();
 			e.stopPropagation();
-			this.startMarginEdit(margin, e);
+			this.startMarginEdit(margin);
 		};
 
 		margin.addEventListener("mousedown", onMouseDown);
 		margin.addEventListener("click", onClick);
 	}
 
-	private startMarginEdit(margin: HTMLElement, clickEvent?: MouseEvent) {
-		// Don't re-initialize if already editing
-		if (margin.contentEditable === "true") {
-			if (clickEvent) {
-				this.placeCursorAtClickPosition(margin, clickEvent);
-			}
-			return;
-		}
+	private startMarginEdit(margin: HTMLElement) {
+		// Don’t re-init if already editing
+		if (this.cmView) return;
 
-		// Mark this footnote as being edited
 		this.plugin.setActiveFootnoteEdit(this.footnoteId);
-
 		margin.dataset.editing = "true";
 
-		const currentText = this.content;
-
+		// Clear rendered markdown and mount a CM6 editor inside the margin
 		margin.innerHTML = "";
-		margin.contentEditable = "true";
-		margin.textContent = currentText;
-		margin.focus();
 
-		if (clickEvent) {
-			this.placeCursorAtClickPosition(margin, clickEvent);
-		} else {
-			const selection = window.getSelection();
-			const range = document.createRange();
-			range.selectNodeContents(margin);
-			range.collapse(false);
-			selection?.removeAllRanges();
-			selection?.addRange(range);
-		}
+		const state = EditorState.create({
+			doc: this.content,
+			extensions: [
+				history(),
+				markdown(),
+				keymap.of(defaultKeymap),
+				keymap.of(historyKeymap),
+				EditorView.lineWrapping,
+			],
+		});
 
-		this.attachEditingListeners(margin);
-	}
+		const cm = new EditorView({
+			state,
+			parent: margin,
+		});
 
-	private attachEditingListeners(margin: HTMLElement) {
-		// Set up capture-phase listeners for formatting shortcuts
-		const cleanupCapture =
-			this.plugin.setupMarginKeyboardCapturePublic(margin);
+		this.cmView = cm;
 
-		const onKeyUp = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		const onKeyPress = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		const onBlur = () => {
-			cleanupCapture();
-			if (margin.dataset.cancelled === "true") {
-				margin.dataset.cancelled = "";
-				this.cancelEdit(margin);
-			} else {
-				this.finishMarginEdit(margin);
-			}
-			margin.removeEventListener("blur", onBlur);
-			margin.removeEventListener("keyup", onKeyUp);
-			margin.removeEventListener("keypress", onKeyPress);
-		};
-
-		margin.addEventListener("blur", onBlur);
-		margin.addEventListener("keyup", onKeyUp);
-		margin.addEventListener("keypress", onKeyPress);
-	}
-
-	private cancelEdit(margin: HTMLElement) {
-		margin.dataset.editing = "false";
-		margin.contentEditable = "false";
-		margin.innerHTML = "";
-		margin.appendChild(
-			this.plugin.renderLinksToFragmentPublic(
-				this.plugin.normalizeTextPublic(this.content),
-			),
+		// Make Obsidian route commands (Cmd+B etc.) to this margin editor while focused
+		cm.dom.addEventListener(
+			"focusin",
+			() => {
+				setWorkspaceActiveEditor(this.plugin, cm);
+			},
+			true,
 		);
+
+		// Commit on blur *out of the editor*, not internal focus moves
+		cm.dom.addEventListener(
+			"focusout",
+			(ev: FocusEvent) => {
+				const related = ev.relatedTarget as Node | null;
+				if (related && cm.dom.contains(related)) return;
+				this.commitAndCloseMarginEditor(margin);
+			},
+			true,
+		);
+
+		// Focus the CM editor
+		requestAnimationFrame(() => cm.focus());
+	}
+
+	private commitAndCloseMarginEditor(margin: HTMLElement) {
+		const cm = this.cmView;
+		if (!cm) return;
+
+		const newText = cm.state.doc.toString();
+
+		// Tear down CM first (prevents weird focus/key routing issues)
+		this.cmView = null;
+		cm.destroy();
+
+		// Restore Obsidian active editor routing
+		setWorkspaceActiveEditor(this.plugin, null);
+
+		// Clear active edit tracking so your ViewPlugin can rebuild decorations
 		this.plugin.setActiveFootnoteEdit(null);
-	}
-
-	/**
-	 * Place the cursor at the position where the user clicked within a contenteditable element.
-	 */
-	private placeCursorAtClickPosition(
-		element: HTMLElement,
-		clickEvent: MouseEvent,
-	) {
-		const selection = window.getSelection();
-		if (!selection) return;
-
-		let range: Range | null = null;
-
-		if (document.caretRangeFromPoint) {
-			range = document.caretRangeFromPoint(
-				clickEvent.clientX,
-				clickEvent.clientY,
-			);
-		} else if ((document as any).caretPositionFromPoint) {
-			const caretPos = (document as any).caretPositionFromPoint(
-				clickEvent.clientX,
-				clickEvent.clientY,
-			);
-			if (caretPos) {
-				range = document.createRange();
-				range.setStart(caretPos.offsetNode, caretPos.offset);
-				range.collapse(true);
-			}
-		}
-
-		if (range) {
-			selection.removeAllRanges();
-			selection.addRange(range);
-		} else {
-			range = document.createRange();
-			range.selectNodeContents(element);
-			range.collapse(false);
-			selection.removeAllRanges();
-			selection.addRange(range);
-		}
-	}
-
-	private finishMarginEdit(margin: HTMLElement) {
-		const newText = margin.textContent ?? "";
 
 		margin.dataset.editing = "false";
-		margin.contentEditable = "false";
-
-		// Clear the active edit tracking so decorations can rebuild
-		this.plugin.setActiveFootnoteEdit(null);
 
 		if (newText === this.content) {
 			margin.innerHTML = "";
@@ -4772,6 +4735,7 @@ class FootnoteSidenoteWidget extends WidgetType {
 			return;
 		}
 
+		// Reuse your existing footnote-definition replacement logic (slightly refactored)
 		const view =
 			this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view?.editor) {
@@ -4803,11 +4767,11 @@ class FootnoteSidenoteWidget extends WidgetType {
 			const to = editor.offsetToPos(match.index + match[0].length);
 
 			editor.replaceRange(newText, from, to);
-			// Let CM6 rebuild the widget with new content - don't update margin manually
+			// Don’t manually re-render; the CM6 decoration will rebuild now that activeFootnoteEdit is null
 			return;
 		}
 
-		// Only reach here if we couldn't find the footnote definition
+		// If we couldn't find the footnote definition, fall back to rendering
 		margin.innerHTML = "";
 		margin.appendChild(
 			this.plugin.renderLinksToFragmentPublic(

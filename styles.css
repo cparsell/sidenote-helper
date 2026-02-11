@@ -171,8 +171,25 @@
 	white-space: pre-wrap;
 }
 
+/* the margin container you mount the CM editor into */
+.sidenote-editor {
+	overflow: visible; /* don't clip */
+}
+
+/* CodeMirror 6 root */
+.sidenote-editor .cm-editor {
+	height: auto; /* allow growth */
+}
+
+/* Scroller: make it stop being a fixed-height scrolling region */
+.sidenote-editor .cm-scroller {
+	overflow: visible !important;
+	height: auto !important;
+}
+
 /* Compact mode: smaller font, tighter spacing - Source view */
-.markdown-source-view.mod-cm6[data-sidenote-mode="compact"] .sidenote-margin {
+.markdown-source-view.mod-cm6[data-sidenote-mode="compact"]
+	.sidenote-margin {
 	font-size: 70%;
 	line-height: 1.25;
 }
@@ -190,7 +207,8 @@
 }
 
 /* Hide sidenotes when mode is hidden - Source view */
-.markdown-source-view.mod-cm6[data-sidenote-mode="hidden"] .sidenote-margin {
+.markdown-source-view.mod-cm6[data-sidenote-mode="hidden"]
+	.sidenote-margin {
 	display: none;
 }
 

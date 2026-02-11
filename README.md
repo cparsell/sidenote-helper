@@ -51,12 +51,22 @@ These are some other strategies I've seen for sidenotes in Obsidian.
 ## Setup
 
 1. Add the plugin to Obsidian. If copying manually from this repo, you can copy the contents of `/sidenotes-helper/` into `your-vault/.obsidian/plugins/sidenotes-helper`.
-2. If copying manually, restart Obsidian and then enable the plugin in **Settings**.
-3. Choose some settings that make sense for you:
 
-- Sidenote format:
-  - **Footnotes**: Traditional Markdown footnotes will become sidenotes
-  - **HTML**: uses `<span>` elements to format the sidenotes. I originally designed using this because it was an easy way for me to set up CSS styles in Obsidian as well as CSS styles in my web-published notes
+2. If copying manually, restart Obsidian and then enable the plugin in **Settings**.
+
+3. Choose some settings that make sense for you.
+   - Choose **sidenote format**:
+     - **Footnotes**: Traditional Markdown footnotes will become sidenotes
+       - **Hide footnotes:** Choose if you want to hide the origina footnotes at the bottom of the note
+       - **Hide footnote numbers:** Hide the original Markdown reference numbers in the note text - e.g. this: `[1]`
+     - **HTML**: uses `<span>` elements to format the sidenotes. I originally designed using this because it was an easy way for me to set up CSS styles in Obsidian as well as CSS styles in my web-published notes
+   - Other style settings include:
+     - **Number style**: Try 'neumorphic badge' for numbers that are more visually identifiable
+     - **Minimum sidenote width**
+     - **Maximum sidenote width**
+     - **Minimum gap between sidenote and text**
+     - **Minimum gap between sidenote and editor edge**
+     - **Page offset factor**: How much the note text gets pushed over to make more space in the margin (it will only offset on notes that have sidenotes)
 
 ## Use
 
