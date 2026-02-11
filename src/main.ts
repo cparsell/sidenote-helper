@@ -1292,34 +1292,35 @@ export default class SidenotePlugin extends Plugin {
 					);
 				}
 
+				margin.dataset.editing = "false";
 				// Set up margin click-to-edit for footnotes
-				if (item.footnoteId) {
-					const footnoteId = item.footnoteId;
+				// if (item.footnoteId) {
+				// 	const footnoteId = item.footnoteId;
 
-					// Initialize editing state
-					margin.dataset.editing = "false";
+				// 	// Initialize editing state
+				// 	margin.dataset.editing = "false";
 
-					margin.addEventListener("mousedown", (e) => {
-						// When editing, allow normal mousedown behavior for cursor positioning
-						if (margin.contentEditable === "true") {
-							return;
-						}
-						e.stopPropagation();
-						e.preventDefault();
-					});
+				// 	margin.addEventListener("mousedown", (e) => {
+				// 		// When editing, allow normal mousedown behavior for cursor positioning
+				// 		if (margin.contentEditable === "true") {
+				// 			return;
+				// 		}
+				// 		e.stopPropagation();
+				// 		e.preventDefault();
+				// 	});
 
-					margin.addEventListener("click", (e) => {
-						// When editing, allow normal click behavior
-						if (margin.contentEditable === "true") {
-							e.stopPropagation();
-							return;
-						}
+				// 	margin.addEventListener("click", (e) => {
+				// 		// When editing, allow normal click behavior
+				// 		if (margin.contentEditable === "true") {
+				// 			e.stopPropagation();
+				// 			return;
+				// 		}
 
-						e.preventDefault();
-						e.stopPropagation();
-						this.startReadingModeMarginEdit(margin, footnoteId, e);
-					});
-				}
+				// 		e.preventDefault();
+				// 		e.stopPropagation();
+				// 		this.startReadingModeMarginEdit(margin, footnoteId, e);
+				// 	});
+				// }
 			}
 
 			item.el.parentNode?.insertBefore(wrapper, item.el);
