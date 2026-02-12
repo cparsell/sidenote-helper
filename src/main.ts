@@ -2660,7 +2660,7 @@ export default class SidenotePlugin extends Plugin {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle),
+				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 				// Your markdown formatting hotkeys (Mod-b/i/k) if you added them:
 				markdownEditHotkeys,
 				// Keep standard CM key behavior (arrow keys, delete, etc.)
@@ -4349,6 +4349,7 @@ class FootnoteSidenoteWidget extends WidgetType {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
+				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 				markdownEditHotkeys,
 				// keep Obsidian’s own hotkey routing possible
 				keymap.of(defaultKeymap),
