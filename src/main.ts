@@ -192,6 +192,10 @@ export default class SidenotePlugin extends Plugin {
 
 	private activeEditingMargin: HTMLElement | null = null;
 
+	private spanCmView: EditorView | null = null;
+	private spanOutsidePointerDown?: (ev: PointerEvent) => void;
+	private spanOriginalText: string = "";
+
 	// Track the currently editing margin element for the global capture listener
 	private currentlyEditingMargin: HTMLElement | null = null;
 
@@ -2763,81 +2767,163 @@ export default class SidenotePlugin extends Plugin {
 		sidenoteIndex: number,
 		clickEvent?: MouseEvent,
 	) {
-		// Don't re-initialize if already editing
-		if (
-			margin.dataset.editing === "true" &&
-			margin.contentEditable === "true"
-		) {
-			return;
-		}
+		// If already editing a span, don't re-init
+		if (this.spanCmView) return;
+
+		// Record original text for cancel
+		this.spanOriginalText = sourceSpan.textContent ?? "";
 
 		margin.dataset.editing = "true";
-
-		// Get the raw text content (without the number prefix)
-		const currentText = sourceSpan.textContent ?? "";
-
-		// Clear margin and make it a simple text editor
 		margin.innerHTML = "";
-		margin.contentEditable = "true";
-		margin.textContent = currentText;
-		margin.focus();
 
-		// Place cursor at click position, or at end if no click event
-		if (clickEvent) {
-			this.placeCursorAtClickPosition(margin, clickEvent);
-		} else {
-			// Place cursor at end
-			const selection = window.getSelection();
-			const range = document.createRange();
-			range.selectNodeContents(margin);
-			range.collapse(false);
-			selection?.removeAllRanges();
-			selection?.addRange(range);
+		const commitAndClose = (opts: { commit: boolean }) => {
+			const cm = this.spanCmView;
+			if (!cm) return;
+
+			const newText = cm.state.doc.toString();
+			const renderText = opts.commit ? newText : this.spanOriginalText;
+
+			// cleanup document listener
+			if (this.spanOutsidePointerDown) {
+				document.removeEventListener(
+					"pointerdown",
+					this.spanOutsidePointerDown,
+					true,
+				);
+				this.spanOutsidePointerDown = undefined;
+			}
+
+			// destroy CM
+			this.spanCmView = null;
+			cm.destroy();
+
+			// restore state
+			margin.dataset.editing = "false";
+
+			// commit to source if needed
+			if (opts.commit && newText !== this.spanOriginalText) {
+				this.commitHtmlSpanSidenoteText(sidenoteIndex, newText);
+			}
+
+			// re-render display mode
+			margin.innerHTML = "";
+			margin.appendChild(
+				this.renderLinksToFragment(this.normalizeText(renderText)),
+			);
+		};
+
+		// Keymap: ESC cancels; Enter commits; Shift-Enter inserts newline (optional)
+		const closeKeymap = keymap.of([
+			{
+				key: "Escape",
+				run: () => {
+					commitAndClose({ commit: false });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Enter",
+				run: () => {
+					commitAndClose({ commit: true });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Shift-Enter",
+				run: (view) => {
+					view.dispatch(view.state.replaceSelection("\n"));
+					return true;
+				},
+				preventDefault: true,
+			},
+		]);
+
+		const state = EditorState.create({
+			doc: this.spanOriginalText,
+			extensions: [
+				sidenoteEditorTheme,
+				history(),
+				markdown(),
+				// Your markdown formatting hotkeys (Mod-b/i/k) if you added them:
+				markdownEditHotkeys,
+				// Keep standard CM key behavior (arrow keys, delete, etc.)
+				keymap.of(historyKeymap),
+				keymap.of(defaultKeymap),
+				EditorView.lineWrapping,
+				closeKeymap,
+			],
+		});
+
+		const cm = new EditorView({
+			state,
+			parent: margin,
+		});
+
+		this.spanCmView = cm;
+
+		// Click anywhere outside the margin editor => commit and close
+		this.spanOutsidePointerDown = (ev: PointerEvent) => {
+			const target = ev.target as Node | null;
+			if (!target) return;
+			if (margin.contains(target) || cm.dom.contains(target)) return;
+
+			commitAndClose({ commit: true });
+		};
+		document.addEventListener(
+			"pointerdown",
+			this.spanOutsidePointerDown,
+			true,
+		);
+
+		requestAnimationFrame(() => cm.focus());
+	}
+
+	private commitHtmlSpanSidenoteText(
+		sidenoteIndex: number,
+		newText: string,
+	) {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.editor) return;
+
+		const editor = view.editor;
+
+		// Preserve scroll like your current finishMarginEdit does
+		const scroller =
+			this.cmRoot?.querySelector<HTMLElement>(".cm-scroller");
+		const scrollTop = scroller?.scrollTop ?? 0;
+
+		this.isEditingMargin = true;
+
+		const content = editor.getValue();
+		const sidenoteRegex =
+			/<span\s+class\s*=\s*["']sidenote["'][^>]*>([\s\S]*?)<\/span>/gi;
+
+		let match: RegExpExecArray | null;
+		let currentIndex = 0;
+
+		while ((match = sidenoteRegex.exec(content)) !== null) {
+			currentIndex++;
+			if (currentIndex === sidenoteIndex) {
+				const from = editor.offsetToPos(match.index);
+				const to = editor.offsetToPos(match.index + match[0].length);
+				const newSpan = `<span class="sidenote">${newText}</span>`;
+
+				this.isMutating = true;
+				try {
+					editor.replaceRange(newSpan, from, to);
+				} finally {
+					this.isMutating = false;
+				}
+				break;
+			}
 		}
 
-		// Track this as the currently editing margin
-		this.setCurrentlyEditingMargin(margin);
+		// Restore scroll
+		if (scroller) scroller.scrollTop = scrollTop;
 
-		// Set up capture-phase listener that blocks all keys from reaching CM6
-		const cleanupCapture = this.setupMarginKeyboardCapture(margin);
-
-		const onKeyUp = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		const onKeyPress = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		// Handle blur (save changes)
-		const onBlur = () => {
-			cleanupCapture();
-			this.setCurrentlyEditingMargin(null);
-
-			if (margin.dataset.cancelled === "true") {
-				// Escape was pressed - restore original content
-				margin.dataset.cancelled = "";
-				margin.dataset.editing = "false";
-				margin.contentEditable = "false";
-				margin.innerHTML = "";
-				margin.appendChild(
-					this.renderLinksToFragment(
-						this.normalizeText(sourceSpan.textContent ?? ""),
-					),
-				);
-			} else {
-				this.finishMarginEdit(margin, sourceSpan, sidenoteIndex);
-			}
-			margin.removeEventListener("blur", onBlur);
-			margin.removeEventListener("keyup", onKeyUp);
-			margin.removeEventListener("keypress", onKeyPress);
-		};
-
-		margin.addEventListener("blur", onBlur);
-		margin.addEventListener("keyup", onKeyUp);
-		margin.addEventListener("keypress", onKeyPress);
+		this.isEditingMargin = false;
 	}
 
 	/**
