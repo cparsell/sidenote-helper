@@ -28,8 +28,8 @@ import {
 } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import {
-	syntaxHighlighting,
 	defaultHighlightStyle,
+	syntaxHighlighting,
 } from "@codemirror/language";
 
 type CleanupFn = () => void;
@@ -1435,190 +1435,6 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	/**
-	 * Start editing a footnote sidenote margin in reading mode.
-	 */
-	private startReadingModeMarginEdit(
-		margin: HTMLElement,
-		footnoteId: string,
-		clickEvent?: MouseEvent,
-	) {
-		// Don't re-initialize if already editing
-		if (margin.contentEditable === "true") {
-			// If we have a click event, just position the cursor
-			if (clickEvent) {
-				this.placeCursorAtClickPosition(margin, clickEvent);
-			}
-			return;
-		}
-
-		margin.dataset.editing = "true";
-
-		// Get the raw markdown text from the source document, not from the rendered HTML
-		let currentText = margin.textContent ?? "";
-
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (view?.editor) {
-			const content = view.editor.getValue();
-
-			// Extract the actual footnote identifier
-			let actualId = footnoteId;
-			const fnHashMatch = footnoteId.match(/^fn-(.+?)-[a-f0-9]+$/i);
-			if (fnHashMatch && fnHashMatch[1]) {
-				actualId = fnHashMatch[1];
-			} else {
-				const fnMatch = footnoteId.match(/^fn-(.+)$/i);
-				if (fnMatch && fnMatch[1]) {
-					actualId = fnMatch[1];
-				}
-			}
-
-			const definitions = this.parseFootnoteDefinitions(content);
-			const sourceText = definitions.get(actualId);
-			if (sourceText) {
-				currentText = sourceText;
-			}
-		}
-
-		// Clear margin and make it editable
-		margin.innerHTML = "";
-		margin.contentEditable = "true";
-		margin.textContent = currentText;
-		margin.focus();
-
-		// Place cursor at click position, or at end if no click event
-		if (clickEvent) {
-			this.placeCursorAtClickPosition(margin, clickEvent);
-		} else {
-			// Place cursor at end
-			const selection = window.getSelection();
-			const range = document.createRange();
-			range.selectNodeContents(margin);
-			range.collapse(false);
-			selection?.removeAllRanges();
-			selection?.addRange(range);
-		}
-
-		// Track this as the currently editing margin
-		this.setCurrentlyEditingMargin(margin);
-
-		// Set up capture-phase listener that blocks all keys from reaching CM6
-		const cleanupCapture = this.setupMarginKeyboardCapture(margin);
-
-		const onKeyUp = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		const onKeyPress = (e: KeyboardEvent) => {
-			e.stopPropagation();
-			e.stopImmediatePropagation();
-		};
-
-		const onBlur = () => {
-			cleanupCapture();
-			this.setCurrentlyEditingMargin(null);
-
-			if (margin.dataset.cancelled === "true") {
-				// Escape was pressed - restore original
-				margin.dataset.cancelled = "";
-				margin.dataset.editing = "false";
-				margin.contentEditable = "false";
-				margin.innerHTML = "";
-				margin.appendChild(
-					this.renderLinksToFragment(this.normalizeText(currentText)),
-				);
-			} else {
-				this.finishReadingModeMarginEdit(margin, footnoteId, currentText);
-			}
-			margin.removeEventListener("blur", onBlur);
-			margin.removeEventListener("keyup", onKeyUp);
-			margin.removeEventListener("keypress", onKeyPress);
-		};
-
-		margin.addEventListener("blur", onBlur);
-		margin.addEventListener("keyup", onKeyUp);
-		margin.addEventListener("keypress", onKeyPress);
-	}
-
-	/**
-	 * Finish editing a footnote sidenote margin in reading mode and save to source.
-	 */
-	private finishReadingModeMarginEdit(
-		margin: HTMLElement,
-		footnoteId: string,
-		originalText: string,
-	) {
-		const newText = margin.textContent ?? "";
-
-		margin.dataset.editing = "false";
-		margin.contentEditable = "false";
-
-		// Restore rendered content
-		margin.innerHTML = "";
-		margin.appendChild(
-			this.renderLinksToFragment(this.normalizeText(newText)),
-		);
-
-		// If no change, we're done
-		if (newText === originalText) {
-			return;
-		}
-
-		// Update the source document
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view?.editor) return;
-
-		const editor = view.editor;
-		const content = editor.getValue();
-
-		// The footnoteId from reading mode is like "fn-1-abc123", we need just the number/id part
-		// Extract the actual footnote identifier - try multiple patterns
-		let actualId = footnoteId;
-
-		// Pattern 1: fn-X-HASH
-		const fnHashMatch = footnoteId.match(/^fn-(.+?)-[a-f0-9]+$/i);
-		if (fnHashMatch && fnHashMatch[1]) {
-			actualId = fnHashMatch[1];
-		} else {
-			// Pattern 2: fn-X
-			const fnMatch = footnoteId.match(/^fn-(.+)$/i);
-			if (fnMatch && fnMatch[1]) {
-				actualId = fnMatch[1];
-			}
-		}
-
-		// console.warn(
-		// 	"Reading mode: footnoteId =",
-		// 	footnoteId,
-		// 	"actualId =",
-		// 	actualId,
-		// );
-
-		// Find and replace the footnote definition
-		const escapedId = actualId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const footnoteDefRegex = new RegExp(
-			`^(\\[\\^${escapedId}\\]:\\s*)(.*)$`,
-			"gm",
-		);
-
-		const match = footnoteDefRegex.exec(content);
-		console.warn("Reading mode: match =", match);
-
-		if (match) {
-			const prefix = match[1] ?? "";
-			const from = editor.offsetToPos(match.index + prefix.length);
-			const to = editor.offsetToPos(match.index + match[0].length);
-
-			editor.replaceRange(newText, from, to);
-			console.warn("Reading mode: replaced successfully");
-		} else {
-			console.warn(
-				"Reading mode: no match found for [^" + actualId + "]:",
-			);
-		}
-	}
-
-	/**
 	 * Calculate and apply the vertical offset so the sidenote aligns with
 	 * the specific line where the reference appears, not the top of the paragraph.
 	 */
@@ -2779,13 +2595,12 @@ export default class SidenotePlugin extends Plugin {
 		margin.innerHTML = "";
 
 		const commitAndClose = (opts: { commit: boolean }) => {
-			const cm = this.spanCmView;
-			if (!cm) return;
+			const cmInner = this.spanCmView;
+			if (!cmInner) return;
 
-			const newText = cm.state.doc.toString();
+			const newText = cmInner.state.doc.toString();
 			const renderText = opts.commit ? newText : this.spanOriginalText;
 
-			// cleanup document listener
 			if (this.spanOutsidePointerDown) {
 				document.removeEventListener(
 					"pointerdown",
@@ -2795,19 +2610,15 @@ export default class SidenotePlugin extends Plugin {
 				this.spanOutsidePointerDown = undefined;
 			}
 
-			// destroy CM
 			this.spanCmView = null;
-			cm.destroy();
+			cmInner.destroy();
 
-			// restore state
 			margin.dataset.editing = "false";
 
-			// commit to source if needed
 			if (opts.commit && newText !== this.spanOriginalText) {
 				this.commitHtmlSpanSidenoteText(sidenoteIndex, newText);
 			}
 
-			// re-render display mode
 			margin.innerHTML = "";
 			margin.appendChild(
 				this.renderLinksToFragment(this.normalizeText(renderText)),
@@ -2816,14 +2627,14 @@ export default class SidenotePlugin extends Plugin {
 
 		// Keymap: ESC cancels; Enter commits; Shift-Enter inserts newline (optional)
 		const closeKeymap = keymap.of([
-			// {
-			// 	key: "Escape",
-			// 	run: () => {
-			// 		commitAndClose({ commit: false });
-			// 		return true;
-			// 	},
-			// 	preventDefault: true,
-			// },
+			{
+				key: "Escape",
+				run: () => {
+					commitAndClose({ commit: false });
+					return true;
+				},
+				preventDefault: true,
+			},
 			{
 				key: "Enter",
 				run: () => {
@@ -2849,7 +2660,7 @@ export default class SidenotePlugin extends Plugin {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				syntaxHighlighting(defaultHighlightStyle),
 				// Your markdown formatting hotkeys (Mod-b/i/k) if you added them:
 				markdownEditHotkeys,
 				// Keep standard CM key behavior (arrow keys, delete, etc.)
@@ -2863,6 +2674,22 @@ export default class SidenotePlugin extends Plugin {
 			state,
 			parent: margin,
 		});
+
+		cm.dom.addEventListener(
+			"focusin",
+			() => {
+				setWorkspaceActiveEditor(this, cm);
+			},
+			true,
+		);
+
+		cm.dom.addEventListener(
+			"focusout",
+			() => {
+				setWorkspaceActiveEditor(this, null);
+			},
+			true,
+		);
 
 		this.spanCmView = cm;
 		cm.dom.classList.add("sidenote-cm-editor");
@@ -2932,143 +2759,6 @@ export default class SidenotePlugin extends Plugin {
 		if (scroller) scroller.scrollTop = scrollTop;
 
 		this.isEditingMargin = false;
-	}
-
-	/**
-	 * Place the cursor at the position where the user clicked within a contenteditable element.
-	 */
-	private placeCursorAtClickPosition(
-		element: HTMLElement,
-		clickEvent: MouseEvent,
-	) {
-		const selection = window.getSelection();
-		if (!selection) return;
-
-		// Use caretRangeFromPoint or caretPositionFromPoint depending on browser support
-		let range: Range | null = null;
-
-		const caretPos = document.caretPositionFromPoint(
-			clickEvent.clientX,
-			clickEvent.clientY,
-		);
-		if (caretPos) {
-			range = document.createRange();
-			range.setStart(caretPos.offsetNode, caretPos.offset);
-			range.collapse(true);
-		}
-
-		if (range) {
-			selection.removeAllRanges();
-			selection.addRange(range);
-		} else {
-			// Fallback: place cursor at end
-			range = document.createRange();
-			range.selectNodeContents(element);
-			range.collapse(false);
-			selection.removeAllRanges();
-			selection.addRange(range);
-		}
-	}
-
-	/**
-	 * Finish editing and save changes to the source document.
-	 * Uses sidenote index for reliable identification.
-	 */
-	private finishMarginEdit(
-		margin: HTMLElement,
-		sourceSpan: HTMLElement,
-		sidenoteIndex: number,
-	) {
-		const newText = margin.textContent ?? "";
-		const oldText = sourceSpan.textContent ?? "";
-
-		margin.dataset.editing = "false";
-		margin.contentEditable = "false";
-
-		// If no change, just restore the rendered content
-		if (newText === oldText) {
-			margin.innerHTML = "";
-			margin.appendChild(
-				this.renderLinksToFragment(this.normalizeText(newText)),
-			);
-			return;
-		}
-
-		// Update the source document
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view?.editor) {
-			// Restore display even if we can't save
-			margin.innerHTML = "";
-			margin.appendChild(
-				this.renderLinksToFragment(this.normalizeText(newText)),
-			);
-			return;
-		}
-
-		const editor = view.editor;
-
-		// Save scroll position before making changes
-		const scroller =
-			this.cmRoot?.querySelector<HTMLElement>(".cm-scroller");
-		const scrollTop = scroller?.scrollTop ?? 0;
-
-		// Set flag to prevent layout from interfering
-		this.isEditingMargin = true;
-
-		const content = editor.getValue();
-
-		// Find the Nth sidenote in the source (using sidenoteIndex)
-		const sidenoteRegex =
-			/<span\s+class\s*=\s*["']sidenote["'][^>]*>([\s\S]*?)<\/span>/gi;
-
-		let match: RegExpExecArray | null;
-		let currentIndex = 0;
-		let found = false;
-
-		while ((match = sidenoteRegex.exec(content)) !== null) {
-			currentIndex++;
-
-			if (currentIndex === sidenoteIndex) {
-				// This is the sidenote we want to edit
-				const from = editor.offsetToPos(match.index);
-				const to = editor.offsetToPos(match.index + match[0].length);
-				const newSpan = `<span class="sidenote">${newText}</span>`;
-
-				this.isMutating = true;
-				try {
-					editor.replaceRange(newSpan, from, to);
-				} finally {
-					this.isMutating = false;
-				}
-
-				found = true;
-				break;
-			}
-		}
-
-		// Restore scroll position after edit
-		const restoreState = () => {
-			if (scroller) {
-				scroller.scrollTop = scrollTop;
-			}
-			this.isEditingMargin = false;
-		};
-
-		if (found) {
-			// Use multiple RAFs to ensure we restore after all updates
-			requestAnimationFrame(() => {
-				requestAnimationFrame(() => {
-					restoreState();
-				});
-			});
-		} else {
-			restoreState();
-			// Couldn't find the sidenote to update, just restore the margin display
-			margin.innerHTML = "";
-			margin.appendChild(
-				this.renderLinksToFragment(this.normalizeText(newText)),
-			);
-		}
 	}
 
 	// ==================== Collision Avoidance ====================
@@ -3252,10 +2942,8 @@ export default class SidenotePlugin extends Plugin {
 				selection.removeAllRanges();
 				selection.addRange(newRange);
 			} catch (e) {
-				console.error(
-					"Sidenotes - Error restoring cursor position (SidenotePlugin.applyMarkdownFormatting):",
-					e,
-				);
+				console.error("Error setting cursor position:", e);
+				// Ignore
 			}
 			return;
 		}
@@ -3377,11 +3065,8 @@ export default class SidenotePlugin extends Plugin {
 				sel.removeAllRanges();
 				sel.addRange(newRange);
 			} catch (e) {
-				console.error(
-					"Sidenotes - Error restoring cursor position (SidenotePlugin.applyMarkdownFormatting)",
-					e,
-				);
 				// Fallback - place at end
+				console.error("Error setting cursor position:", e);
 				const fallbackRange = document.createRange();
 				fallbackRange.selectNodeContents(element);
 				fallbackRange.collapse(false);
@@ -3471,6 +3156,7 @@ export default class SidenotePlugin extends Plugin {
 				sel.addRange(newRange);
 			} catch (e) {
 				// Fallback
+				console.error("Sidenotes - Error setting cursor position:", e);
 			}
 		});
 	}
@@ -3525,6 +3211,7 @@ export default class SidenotePlugin extends Plugin {
 				sel.removeAllRanges();
 				sel.addRange(newRange);
 			} catch (e) {
+				console.error("Sidenotes - Error setting cursor position:", e);
 				// Fallback
 			}
 		});
@@ -4258,6 +3945,21 @@ export function cmEditorAdapter(view: EditorView): MinimalEditor {
 		},
 	};
 }
+function setWorkspaceActiveEditor(
+	plugin: SidenotePlugin,
+	view: EditorView | null,
+) {
+	const ws: any = plugin.app.workspace;
+	if (!view) {
+		ws.activeEditor = null;
+		return;
+	}
+
+	ws.activeEditor = {
+		editor: cmEditorAdapter(view),
+		file: plugin.app.workspace.getActiveFile(),
+	};
+}
 
 function wrapSelection(view: EditorView, left: string, right: string) {
 	const changes: { from: number; to: number; insert: string }[] = [];
@@ -4429,8 +4131,8 @@ class FootnoteSidenoteWidget extends WidgetType {
 		const margin = document.createElement("small");
 		margin.className = "sidenote-margin";
 		margin.dataset.sidenoteNum = this.numberText;
-		margin.style.setProperty("--sidenote-shift", `${0}px`);
-		margin.style.setProperty("--sidenote-line-offset", `${0}px`);
+		margin.style.setProperty("--sidenote-shift", "0px");
+		margin.style.setProperty("--sidenote-line-offset", "0px");
 
 		// Render the content with markdown formatting support
 		const fragment = this.plugin.renderLinksToFragmentPublic(
@@ -4647,7 +4349,6 @@ class FootnoteSidenoteWidget extends WidgetType {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 				markdownEditHotkeys,
 				// keep Obsidian’s own hotkey routing possible
 				keymap.of(defaultKeymap),
@@ -4714,6 +4415,79 @@ class FootnoteSidenoteWidget extends WidgetType {
 		);
 
 		requestAnimationFrame(() => cm.focus());
+	}
+
+	private commitAndCloseMarginEditor(margin: HTMLElement) {
+		const cm = this.cmView;
+		if (!cm) return;
+
+		const newText = cm.state.doc.toString();
+
+		// Tear down CM first (prevents weird focus/key routing issues)
+		this.cmView = null;
+		cm.destroy();
+
+		// Restore Obsidian active editor routing
+		setWorkspaceActiveEditor(this.plugin, null);
+
+		// Clear active edit tracking so your ViewPlugin can rebuild decorations
+		this.plugin.setActiveFootnoteEdit(null);
+
+		margin.dataset.editing = "false";
+
+		if (newText === this.content) {
+			margin.innerHTML = "";
+			margin.appendChild(
+				this.plugin.renderLinksToFragmentPublic(
+					this.plugin.normalizeTextPublic(newText),
+				),
+			);
+			return;
+		}
+
+		// Reuse your existing footnote-definition replacement logic (slightly refactored)
+		const view =
+			this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.editor) {
+			margin.innerHTML = "";
+			margin.appendChild(
+				this.plugin.renderLinksToFragmentPublic(
+					this.plugin.normalizeTextPublic(newText),
+				),
+			);
+			return;
+		}
+
+		const editor = view.editor;
+		const content = editor.getValue();
+
+		const escapedId = this.footnoteId.replace(
+			/[.*+?^${}()|[\]\\]/g,
+			"\\$&",
+		);
+		const footnoteDefRegex = new RegExp(
+			`^(\\[\\^${escapedId}\\]:\\s*)(.+(?:\\n(?:[ \\t]+.+)*)?)$`,
+			"gm",
+		);
+
+		const match = footnoteDefRegex.exec(content);
+		if (match) {
+			const prefix = match[1] ?? "";
+			const from = editor.offsetToPos(match.index + prefix.length);
+			const to = editor.offsetToPos(match.index + match[0].length);
+
+			editor.replaceRange(newText, from, to);
+			// Don’t manually re-render; the CM6 decoration will rebuild now that activeFootnoteEdit is null
+			return;
+		}
+
+		// If we couldn't find the footnote definition, fall back to rendering
+		margin.innerHTML = "";
+		margin.appendChild(
+			this.plugin.renderLinksToFragmentPublic(
+				this.plugin.normalizeTextPublic(newText),
+			),
+		);
 	}
 
 	eq(other: FootnoteSidenoteWidget): boolean {
