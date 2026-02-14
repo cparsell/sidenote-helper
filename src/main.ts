@@ -30,7 +30,9 @@ import { markdown } from "@codemirror/lang-markdown";
 import {
 	defaultHighlightStyle,
 	syntaxHighlighting,
+	HighlightStyle,
 } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 
 type CleanupFn = () => void;
 
@@ -1516,7 +1518,6 @@ export default class SidenotePlugin extends Plugin {
 					margin.style.cursor = "pointer";
 
 					const sidenoteIndex = num - 1;
-					const sourceSpan = item.el;
 
 					margin.addEventListener("click", (e) => {
 						if (margin.dataset.editing === "true") {
@@ -1525,7 +1526,16 @@ export default class SidenotePlugin extends Plugin {
 						}
 						e.preventDefault();
 						e.stopPropagation();
-						this.startMarginEdit(margin, sourceSpan, sidenoteIndex, e);
+
+						// Read raw markdown from source rather than DOM textContent
+						const rawText = this.getHtmlSidenoteSourceText(sidenoteIndex);
+						if (rawText !== null) {
+							this.startReadingModeHtmlEdit(
+								margin,
+								sidenoteIndex,
+								rawText,
+							);
+						}
 					});
 				}
 			} else {
@@ -1870,6 +1880,177 @@ export default class SidenotePlugin extends Plugin {
 		}
 	}
 
+	// ==================== Reading Mode HTML Editing ========================
+
+	/**
+	 * Extract the raw markdown text of the Nth sidenote from the source file.
+	 */
+	private getHtmlSidenoteSourceText(sidenoteIndex: number): string | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const content =
+			view?.editor?.getValue() ||
+			(view as any)?.data ||
+			this.cachedSourceContent ||
+			"";
+		if (!content) return null;
+
+		const regex =
+			/<span\s+class\s*=\s*["']sidenote["'][^>]*>([\s\S]*?)<\/span>/gi;
+		let match: RegExpExecArray | null;
+		let idx = 0;
+
+		while ((match = regex.exec(content)) !== null) {
+			if (idx === sidenoteIndex) {
+				return match[1] ?? "";
+			}
+			idx++;
+		}
+		return null;
+	}
+
+	/**
+	 * Open a CM6 editor for an HTML span sidenote in reading mode,
+	 * using the raw markdown source text.
+	 */
+	private startReadingModeHtmlEdit(
+		margin: HTMLElement,
+		sidenoteIndex: number,
+		rawText: string,
+	) {
+		// Close any existing editor
+		if (this.spanCmView) return;
+
+		this.spanOriginalText = rawText;
+		this.activeReadingModeMargin = margin;
+
+		margin.dataset.editing = "true";
+		margin.innerHTML = "";
+
+		const commitAndClose = (opts: { commit: boolean }) => {
+			const cm = this.spanCmView;
+			if (!cm) return;
+
+			const newText = cm.state.doc.toString();
+			const renderText = opts.commit ? newText : this.spanOriginalText;
+
+			if (this.spanOutsidePointerDown) {
+				document.removeEventListener(
+					"pointerdown",
+					this.spanOutsidePointerDown,
+					true,
+				);
+				this.spanOutsidePointerDown = undefined;
+			}
+
+			this.spanCmView = null;
+			cm.destroy();
+
+			setWorkspaceActiveEditor(this, null);
+
+			margin.dataset.editing = "false";
+
+			if (opts.commit && newText !== this.spanOriginalText) {
+				this.commitHtmlSpanSidenoteText(sidenoteIndex, newText);
+			}
+
+			margin.innerHTML = "";
+			margin.appendChild(
+				this.renderLinksToFragment(this.normalizeText(renderText)),
+			);
+
+			if (this.settings.editInReadingMode) {
+				margin.style.cursor = "pointer";
+			}
+
+			this.activeReadingModeMargin = null;
+		};
+
+		const closeKeymap = keymap.of([
+			{
+				key: "Escape",
+				run: () => {
+					commitAndClose({ commit: false });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Enter",
+				run: () => {
+					commitAndClose({ commit: true });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Shift-Enter",
+				run: (view) => {
+					view.dispatch(view.state.replaceSelection("\n"));
+					return true;
+				},
+				preventDefault: true,
+			},
+		]);
+
+		const state = EditorState.create({
+			doc: rawText,
+			extensions: [
+				closeKeymap,
+				sidenoteEditorTheme,
+				history(),
+				markdown(),
+				syntaxHighlighting(sidenoteHighlightStyle, { fallback: true }),
+				markdownEditHotkeys,
+				keymap.of(historyKeymap),
+				keymap.of(defaultKeymap),
+				EditorView.lineWrapping,
+			],
+		});
+
+		const cm = new EditorView({ state, parent: margin });
+		this.spanCmView = cm;
+		cm.dom.classList.add("sidenote-cm-editor");
+
+		const scroller = cm.dom.querySelector<HTMLElement>(".cm-scroller");
+		if (scroller) {
+			setCssProps(scroller, { "padding-left": "0", padding: "0" }, true);
+		}
+
+		cm.dom.addEventListener(
+			"focusin",
+			() => setWorkspaceActiveEditor(this, cm),
+			true,
+		);
+		cm.dom.addEventListener(
+			"focusout",
+			() => setWorkspaceActiveEditor(this, null),
+			true,
+		);
+
+		const cleanupKeyboard = this.setupMarginKeyboardCapture(margin);
+		const snMargin = margin as SidenoteMarginElement;
+		snMargin._sidenoteCleanup = () => {
+			cleanupKeyboard();
+			if (this.spanCmView === cm) {
+				commitAndClose({ commit: false });
+			}
+		};
+
+		this.spanOutsidePointerDown = (ev: PointerEvent) => {
+			const target = ev.target as Node | null;
+			if (!target) return;
+			if (margin.contains(target) || cm.dom.contains(target)) return;
+			commitAndClose({ commit: true });
+		};
+		document.addEventListener(
+			"pointerdown",
+			this.spanOutsidePointerDown,
+			true,
+		);
+
+		requestAnimationFrame(() => cm.focus());
+	}
+
 	// ==================== Reading Mode Footnote Editing ====================
 
 	/**
@@ -1935,7 +2116,7 @@ export default class SidenotePlugin extends Plugin {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				syntaxHighlighting(sidenoteHighlightStyle, { fallback: true }),
 				markdownEditHotkeys,
 				keymap.of(historyKeymap),
 				keymap.of(defaultKeymap),
@@ -3283,7 +3464,7 @@ export default class SidenotePlugin extends Plugin {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				syntaxHighlighting(sidenoteHighlightStyle, { fallback: true }),
 				// Your markdown formatting hotkeys (Mod-b/i/k) if you added them:
 				markdownEditHotkeys,
 				// Keep standard CM key behavior (arrow keys, delete, etc.)
@@ -4753,6 +4934,25 @@ const sidenoteEditorTheme = EditorView.theme({
 	},
 });
 
+const sidenoteHighlightStyle = HighlightStyle.define([
+	{ tag: tags.strong, fontWeight: "bold" },
+	{ tag: tags.emphasis, fontStyle: "italic" },
+	{ tag: tags.strikethrough, textDecoration: "line-through" },
+	{
+		tag: tags.monospace,
+		fontFamily: "var(--font-monospace)",
+		fontSize: "0.9em",
+	},
+	{
+		tag: tags.link,
+		color: "var(--link-color, var(--text-accent))",
+		textDecoration: "underline",
+	},
+	{ tag: tags.url, color: "var(--link-color, var(--text-accent))" },
+	// Dim the markdown syntax characters (**, *, `, [, ], etc.)
+	{ tag: tags.processingInstruction, color: "var(--text-faint)" },
+]);
+
 // ======================================================
 // ========CodeMirror 6 Footnote Sidenote Widget ========
 // ======================================================
@@ -4996,7 +5196,7 @@ class FootnoteSidenoteWidget extends WidgetType {
 				sidenoteEditorTheme,
 				history(),
 				markdown(),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				syntaxHighlighting(sidenoteHighlightStyle, { fallback: true }),
 				markdownEditHotkeys,
 				// keep Obsidian’s own hotkey routing possible
 				keymap.of(defaultKeymap),
