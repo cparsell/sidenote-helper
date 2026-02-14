@@ -94,6 +94,7 @@ interface SidenoteSettings {
 	collisionSpacing: number;
 	enableTransitions: boolean;
 	resetNumberingPerHeading: boolean;
+	editInReadingMode: boolean;
 }
 
 const DEFAULT_SETTINGS: SidenoteSettings = {
@@ -132,6 +133,7 @@ const DEFAULT_SETTINGS: SidenoteSettings = {
 	collisionSpacing: 8,
 	enableTransitions: true,
 	resetNumberingPerHeading: false,
+	editInReadingMode: false,
 };
 
 // Regex to detect sidenote spans in source text
@@ -202,6 +204,13 @@ export default class SidenotePlugin extends Plugin {
 	private spanCmView: EditorView | null = null;
 	private spanOutsidePointerDown?: (ev: PointerEvent) => void;
 	private spanOriginalText: string = "";
+
+	// Reading-mode footnote editing state
+	private readingCmView: EditorView | null = null;
+	private readingCmOutsidePointerDown?: (ev: PointerEvent) => void;
+	private readingCmOriginalText: string = "";
+	private readingCmFootnoteId: string = "";
+	private activeReadingModeMargin: HTMLElement | null = null;
 
 	// Track the currently editing margin element for the global capture listener
 	private currentlyEditingMargin: HTMLElement | null = null;
@@ -499,6 +508,10 @@ export default class SidenotePlugin extends Plugin {
 
 	public getCurrentlyEditingMargin(): HTMLElement | null {
 		return this.currentlyEditingMargin;
+	}
+
+	public forceReadingModeRefreshPublic() {
+		this.forceReadingModeRefresh();
 	}
 
 	private cleanupView(view: MarkdownView | null) {
@@ -1512,35 +1525,28 @@ export default class SidenotePlugin extends Plugin {
 
 				margin.dataset.editing = "false";
 
-				// COMMENTED OUT TO DISABLE EDITING IN READING MODE FOR NOW
-				// Set up margin click-to-edit for footnotes
-				// if (item.footnoteId) {
-				// 	const footnoteId = item.footnoteId;
+				// Set up click-to-edit if enabled
+				if (this.settings.editInReadingMode && item.footnoteId) {
+					const footnoteId = item.footnoteId;
+					const footnoteText = item.text;
 
-				// 	// Initialize editing state
-				// 	margin.dataset.editing = "false";
+					margin.style.cursor = "pointer";
 
-				// 	margin.addEventListener("mousedown", (e) => {
-				// 		// When editing, allow normal mousedown behavior for cursor positioning
-				// 		if (margin.contentEditable === "true") {
-				// 			return;
-				// 		}
-				// 		e.stopPropagation();
-				// 		e.preventDefault();
-				// 	});
+					margin.addEventListener("click", (e) => {
+						if (margin.dataset.editing === "true") {
+							e.stopPropagation();
+							return;
+						}
 
-				// 	margin.addEventListener("click", (e) => {
-				// 		// When editing, allow normal click behavior
-				// 		if (margin.contentEditable === "true") {
-				// 			e.stopPropagation();
-				// 			return;
-				// 		}
-
-				// 		e.preventDefault();
-				// 		e.stopPropagation();
-				// 		this.startReadingModeMarginEdit(margin, footnoteId, e);
-				// 	});
-				// }
+						e.preventDefault();
+						e.stopPropagation();
+						this.startReadingModeFootnoteEdit(
+							margin,
+							footnoteId,
+							footnoteText,
+						);
+					});
+				}
 			}
 
 			item.el.parentNode?.insertBefore(wrapper, item.el);
@@ -1548,7 +1554,6 @@ export default class SidenotePlugin extends Plugin {
 			wrapper.appendChild(margin);
 
 			// Add click handler on wrapper to trigger margin editing (for footnote sidenotes)
-			// COMMENTED OUT TO DISABLE EDITING IN READING MODE FOR NOW
 			// if (item.type === "footnote" && item.footnoteId) {
 			// 	const footnoteId = item.footnoteId;
 
@@ -1846,6 +1851,289 @@ export default class SidenotePlugin extends Plugin {
 
 			target.appendChild(cloned);
 		}
+	}
+
+	// ==================== Reading Mode Footnote Editing ====================
+
+	/**
+	 * Open a CM6 editor inside a reading-mode sidenote margin for a footnote.
+	 */
+	private startReadingModeFootnoteEdit(
+		margin: HTMLElement,
+		footnoteId: string,
+		footnoteText: string,
+	) {
+		// If already editing another reading-mode margin, commit it first
+		if (this.readingCmView && this.activeReadingModeMargin) {
+			this.finishReadingModeFootnoteEdit(
+				this.activeReadingModeMargin,
+				true,
+			);
+		}
+
+		this.readingCmOriginalText = footnoteText;
+		this.readingCmFootnoteId = footnoteId;
+		this.isEditingMargin = true;
+
+		margin.dataset.editing = "true";
+		this.activeReadingModeMargin = margin;
+		margin.innerHTML = "";
+		margin.style.cursor = "";
+
+		const commitAndClose = (opts: { commit: boolean }) => {
+			this.finishReadingModeFootnoteEdit(margin, opts.commit);
+		};
+
+		const closeKeymap = keymap.of([
+			{
+				key: "Escape",
+				run: () => {
+					commitAndClose({ commit: false });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Enter",
+				run: () => {
+					commitAndClose({ commit: true });
+					return true;
+				},
+				preventDefault: true,
+			},
+			{
+				key: "Shift-Enter",
+				run: (view) => {
+					view.dispatch(view.state.replaceSelection("\n"));
+					return true;
+				},
+				preventDefault: true,
+			},
+		]);
+
+		const state = EditorState.create({
+			doc: footnoteText,
+			extensions: [
+				closeKeymap,
+				sidenoteEditorTheme,
+				history(),
+				markdown(),
+				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				markdownEditHotkeys,
+				keymap.of(historyKeymap),
+				keymap.of(defaultKeymap),
+				EditorView.lineWrapping,
+			],
+		});
+
+		const cm = new EditorView({ state, parent: margin });
+		this.readingCmView = cm;
+
+		cm.dom.classList.add("sidenote-cm-editor");
+
+		const scroller = cm.dom.querySelector<HTMLElement>(".cm-scroller");
+		if (scroller) {
+			setCssProps(scroller, { "padding-left": "0", padding: "0" }, true);
+		}
+
+		// Route Obsidian's active editor to this CM instance
+		cm.dom.addEventListener(
+			"focusin",
+			() => setWorkspaceActiveEditor(this, cm),
+			true,
+		);
+		cm.dom.addEventListener(
+			"focusout",
+			() => setWorkspaceActiveEditor(this, null),
+			true,
+		);
+
+		// Set up keyboard capture so Obsidian hotkeys don't interfere
+		const cleanupKeyboard = this.setupMarginKeyboardCapture(margin);
+		const snMargin = margin as SidenoteMarginElement;
+		snMargin._sidenoteCleanup = () => {
+			cleanupKeyboard();
+			if (this.readingCmView === cm) {
+				this.finishReadingModeFootnoteEdit(margin, false);
+			}
+		};
+
+		// Click outside → commit and close
+		this.readingCmOutsidePointerDown = (ev: PointerEvent) => {
+			const target = ev.target as Node | null;
+			if (!target) return;
+			if (margin.contains(target) || cm.dom.contains(target)) return;
+			commitAndClose({ commit: true });
+		};
+		document.addEventListener(
+			"pointerdown",
+			this.readingCmOutsidePointerDown,
+			true,
+		);
+
+		requestAnimationFrame(() => cm.focus());
+	}
+
+	/**
+	 * Close the reading-mode footnote editor, optionally committing changes.
+	 */
+	private finishReadingModeFootnoteEdit(
+		margin: HTMLElement,
+		commit: boolean,
+	) {
+		const cm = this.readingCmView;
+		if (!cm) return;
+
+		const newText = cm.state.doc.toString();
+		const renderText = commit ? newText : this.readingCmOriginalText;
+
+		// Remove outside-click listener
+		if (this.readingCmOutsidePointerDown) {
+			document.removeEventListener(
+				"pointerdown",
+				this.readingCmOutsidePointerDown,
+				true,
+			);
+			this.readingCmOutsidePointerDown = undefined;
+		}
+
+		// Destroy CM
+		this.readingCmView = null;
+		cm.destroy();
+
+		// Restore Obsidian active editor routing
+		setWorkspaceActiveEditor(this, null);
+
+		this.isEditingMargin = false;
+		margin.dataset.editing = "false";
+		this.activeReadingModeMargin = null;
+
+		// Commit to the source file if changed
+		if (commit && newText !== this.readingCmOriginalText) {
+			this.commitReadingModeFootnoteText(
+				this.readingCmFootnoteId,
+				newText,
+			);
+		}
+
+		// Re-render the sidenote display
+		margin.innerHTML = "";
+		margin.appendChild(
+			this.renderLinksToFragment(this.normalizeText(renderText)),
+		);
+
+		// Restore click cursor if editing is enabled
+		if (this.settings.editInReadingMode) {
+			margin.style.cursor = "pointer";
+		}
+
+		// Update cached source content for consistency
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const content = view?.editor?.getValue() || (view as any)?.data || "";
+		if (content) {
+			this.cachedSourceContent = content;
+		}
+	}
+
+	/**
+	 * Write the new footnote text back to the source file.
+	 * Works even in reading mode by using view.editor (which Obsidian
+	 * keeps synchronized) or falling back to vault.modify().
+	 */
+	private commitReadingModeFootnoteText(
+		footnoteId: string,
+		newText: string,
+	) {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+
+		// Try editor first (Obsidian keeps it in sync even in reading mode)
+		const editor = view?.editor;
+		if (editor) {
+			const content = editor.getValue();
+			const replacement = this.buildFootnoteReplacement(
+				content,
+				footnoteId,
+				newText,
+			);
+			if (replacement) {
+				editor.replaceRange(newText, replacement.from, replacement.to);
+				return;
+			}
+		}
+
+		// Fallback: direct vault modify
+		const file = view?.file ?? this.app.workspace.getActiveFile();
+		if (!file) return;
+
+		void this.app.vault.read(file).then((content) => {
+			const replacement = this.buildFootnoteReplacement(
+				content,
+				footnoteId,
+				newText,
+			);
+			if (!replacement) return;
+
+			const before = content.slice(0, replacement.offsetFrom);
+			const after = content.slice(replacement.offsetTo);
+			const newContent = before + newText + after;
+
+			void this.app.vault.modify(file, newContent);
+		});
+	}
+
+	/**
+	 * Find the footnote definition in source text and return the range to replace.
+	 * Returns both EditorPosition (for editor.replaceRange) and raw offsets
+	 * (for vault.modify fallback).
+	 */
+	private buildFootnoteReplacement(
+		content: string,
+		footnoteId: string,
+		_newText: string,
+	): {
+		from: EditorPosition;
+		to: EditorPosition;
+		offsetFrom: number;
+		offsetTo: number;
+	} | null {
+		const escapedId = footnoteId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const regex = new RegExp(
+			`^(\\[\\^${escapedId}\\]:\\s*)(.+(?:\\n(?:[ \\t]+.+)*)?)$`,
+			"gm",
+		);
+
+		const match = regex.exec(content);
+		if (!match) return null;
+
+		const prefix = match[1] ?? "";
+		const offsetFrom = match.index + prefix.length;
+		const offsetTo = match.index + match[0].length;
+
+		// Convert offsets to line/ch positions
+		const from = this.offsetToEditorPos(content, offsetFrom);
+		const to = this.offsetToEditorPos(content, offsetTo);
+
+		return { from, to, offsetFrom, offsetTo };
+	}
+
+	/**
+	 * Convert a character offset to an EditorPosition {line, ch}.
+	 */
+	private offsetToEditorPos(
+		content: string,
+		offset: number,
+	): EditorPosition {
+		let line = 0;
+		let ch = 0;
+		for (let i = 0; i < offset && i < content.length; i++) {
+			if (content[i] === "\n") {
+				line++;
+				ch = 0;
+			} else {
+				ch++;
+			}
+		}
+		return { line, ch };
 	}
 
 	/**
@@ -3159,6 +3447,7 @@ export default class SidenotePlugin extends Plugin {
 			}
 		}
 	}
+
 	/**
 	 * Schedule collision resolution for editing mode.
 	 */
@@ -4162,6 +4451,21 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.resetNumberingPerHeading = value;
 						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Allow Sidenote Edits in reading mode")
+			.setDesc(
+				"Click a sidenote in reading mode to edit the footnote text inline (only relevant if using footnote format)",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.editInReadingMode)
+					.onChange(async (value) => {
+						this.plugin.settings.editInReadingMode = value;
+						await this.plugin.saveSettings();
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
