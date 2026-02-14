@@ -1511,6 +1511,23 @@ export default class SidenotePlugin extends Plugin {
 
 			if (item.type === "sidenote") {
 				this.cloneContentToMargin(item.el, margin);
+				if (this.settings.editInReadingMode) {
+					margin.dataset.editing = "false";
+					margin.style.cursor = "pointer";
+
+					const sidenoteIndex = num - 1;
+					const sourceSpan = item.el;
+
+					margin.addEventListener("click", (e) => {
+						if (margin.dataset.editing === "true") {
+							e.stopPropagation();
+							return;
+						}
+						e.preventDefault();
+						e.stopPropagation();
+						this.startMarginEdit(margin, sourceSpan, sidenoteIndex, e);
+					});
+				}
 			} else {
 				// For footnotes, hide the original [1] link inside the sup
 				const anchor = item.el.querySelector("a.footnote-link");
@@ -4680,6 +4697,8 @@ const sidenoteEditorTheme = EditorView.theme({
 		border: "none !important",
 		height: "auto !important",
 		minHeight: "0 !important",
+		fontFamily: "inherit !important",
+		fontSize: "inherit !important",
 	},
 	"& .cm-scroller": {
 		padding: "0 !important",
@@ -4689,12 +4708,16 @@ const sidenoteEditorTheme = EditorView.theme({
 		overflow: "visible !important",
 		height: "auto !important",
 		minHeight: "0 !important",
+		fontFamily: "inherit !important",
 	},
 	"& .cm-content": {
 		padding: "2px 0 !important",
 		paddingLeft: "0 !important",
 		margin: "0 !important",
 		minHeight: "auto !important",
+		fontFamily: "inherit !important",
+		fontSize: "inherit !important",
+		lineHeight: "inherit !important",
 	},
 	"& .cm-content[contenteditable]": {
 		padding: "2px 0 !important",
@@ -4704,6 +4727,7 @@ const sidenoteEditorTheme = EditorView.theme({
 		padding: "0 !important",
 		paddingLeft: "0 !important",
 		margin: "0 !important",
+		fontFamily: "inherit !important",
 	},
 	"& .cm-gutters": {
 		display: "none !important",
