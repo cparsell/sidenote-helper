@@ -179,10 +179,13 @@ export default class SidenotePlugin extends Plugin {
 
 	private footnoteProcessingTimer: number | null = null;
 	private footnoteProcessingRetries = 0;
-	private static readonly MAX_FOOTNOTE_PROCESSING_RETRIES = 5;
+	private needsReadingModeRefresh = true;
 
 	private pendingFootnoteEdit: string | null = null;
 	private pendingFootnoteEditRetries = 0;
+
+	// Cached source content for reading mode (editor.getValue() can be empty)
+	private cachedSourceContent: string = "";
 
 	// Timing constants (in milliseconds)
 	private static readonly RESIZE_DEBOUNCE = 100;
@@ -329,6 +332,10 @@ export default class SidenotePlugin extends Plugin {
 			}
 
 			if (hasContent) {
+				// console.log(
+				// 	"[Sidenotes] Post-processor: found content, format =",
+				// 	this.settings.sidenoteFormat,
+				// );
 				if (this.settings.sidenoteFormat !== "html") {
 					// For footnotes, use the debounced processor that waits
 					// for both refs AND definitions to be present
@@ -349,6 +356,7 @@ export default class SidenotePlugin extends Plugin {
 			this.app.workspace.on("active-leaf-change", () => {
 				this.resetRegistry();
 				this.invalidateLayoutCache();
+				this.needsReadingModeRefresh = true;
 				this.scanDocumentForSidenotes();
 				this.rebindAndSchedule();
 			}),
@@ -365,6 +373,7 @@ export default class SidenotePlugin extends Plugin {
 				this.resetRegistry();
 				this.invalidateLayoutCache();
 				this.footnoteProcessingRetries = 0;
+				this.needsReadingModeRefresh = true;
 				this.scanDocumentForSidenotes();
 				this.rebindAndSchedule();
 			}),
@@ -372,16 +381,17 @@ export default class SidenotePlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on("editor-change", () => {
-				// Skip if we're in the middle of a margin edit
 				if (this.isEditingMargin) return;
-
+				this.needsReadingModeRefresh = true;
 				this.scanDocumentForSidenotes();
 				this.needsFullRenumber = true;
 				this.invalidateLayoutCache();
 				this.scheduleLayoutDebounced(SidenotePlugin.MUTATION_DEBOUNCE);
 			}),
 		);
+
 		this.registerDomEvent(window, "resize", () => {
+			this.needsReadingModeRefresh = true;
 			this.scheduleLayoutThrottled(SidenotePlugin.RESIZE_DEBOUNCE);
 			this.scheduleReadingModeLayoutThrottled(100);
 		});
@@ -628,6 +638,7 @@ export default class SidenotePlugin extends Plugin {
 	 * Force a refresh of reading mode sidenotes.
 	 */
 	private forceReadingModeRefresh() {
+		this.needsReadingModeRefresh = true;
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return;
 
@@ -649,6 +660,16 @@ export default class SidenotePlugin extends Plugin {
 
 		// Schedule reprocessing with a delay to ensure cleanup is complete
 		setTimeout(() => {
+			const useFootnotes =
+				this.settings.sidenoteFormat === "footnote" ||
+				this.settings.sidenoteFormat === "footnote-edit";
+
+			if (useFootnotes) {
+				// Wait until footnote defs are present, then process.
+				this.scheduleFootnoteProcessing();
+				return;
+			}
+
 			requestAnimationFrame(() => {
 				requestAnimationFrame(() => {
 					this.processReadingModeSidenotes(readingRoot);
@@ -1122,6 +1143,17 @@ export default class SidenotePlugin extends Plugin {
 		);
 		if (!readingRoot) return;
 
+		// If sidenotes are already built and the source hasn't changed, skip.
+		const existingMargins = readingRoot.querySelectorAll(
+			"small.sidenote-margin",
+		).length;
+		if (existingMargins > 0 && !this.needsReadingModeRefresh) {
+			return;
+		}
+		this.needsReadingModeRefresh = false;
+
+		// console.log("[Sidenotes] processReadingModeSidenotes called");
+
 		const rect = readingRoot.getBoundingClientRect();
 		const width = rect.width;
 
@@ -1138,7 +1170,14 @@ export default class SidenotePlugin extends Plugin {
 			scaleFactor.toFixed(3),
 		);
 
-		if (mode === "hidden") return;
+		if (mode === "hidden") {
+			// console.log(
+			// 	"[Sidenotes] Mode is 'hidden' (width:",
+			// 	width,
+			// 	") — skipping",
+			// );
+			return;
+		}
 
 		// First, remove any existing sidenote markup in the reading root to start fresh
 		this.removeAllSidenoteMarkupFromReadingMode(readingRoot);
@@ -1180,75 +1219,96 @@ export default class SidenotePlugin extends Plugin {
 		}
 
 		if (useFootnotes) {
-			// First, build a map of footnote definitions from the rendered HTML
-			// This is more reliable than matching by ID since Obsidian's IDs can have hashes
-			const footnoteDefMap = new Map<string, HTMLElement>();
+			// Get footnote definitions from SOURCE MARKDOWN, not from rendered HTML.
+			// Obsidian uses virtualized rendering — the <section class="footnotes">
+			// may not exist in the DOM for long documents where it's off-screen.
 
-			// Look for footnote definitions in multiple possible locations
-			const footnoteLis = readingRoot.querySelectorAll<HTMLElement>(
-				"section.footnotes li, .footnotes li, ol li[id^='fn-']",
-			);
+			// Try multiple methods to get source content (in order of reliability):
+			// 1. view.editor.getValue() — works in editing mode, sometimes in reading mode
+			// 2. (view as any).data — Obsidian's cached file content (always available)
+			// 3. this.cachedSourceContent — cached from scanDocumentForSidenotes()
+			const view2 = this.app.workspace.getActiveViewOfType(MarkdownView);
+			let sourceContent =
+				view2?.editor?.getValue() ||
+				(view2 as any)?.data ||
+				this.cachedSourceContent ||
+				"";
 
-			for (const li of Array.from(footnoteLis)) {
-				const liId = li.id || li.dataset.footnoteId || "";
-				if (!liId) continue;
-
-				// Extract the base footnote ID (strip hash suffix)
-				// fn-1-abc123 -> 1, fn-myref-abc123 -> myref
-				let baseId: string | null = null;
-				const hashMatch = liId.match(/^fn-(.+?)-[a-f0-9]+$/i);
-				if (hashMatch && hashMatch[1]) {
-					baseId = hashMatch[1];
-				} else {
-					const simpleMatch = liId.match(/^fn-(.+)$/i);
-					if (simpleMatch && simpleMatch[1]) {
-						baseId = simpleMatch[1];
-					}
+			// If still empty, try async cachedRead as last resort
+			if (!sourceContent) {
+				const file = view2?.file ?? this.app.workspace.getActiveFile();
+				if (file) {
+					void this.app.vault.cachedRead(file).then((text) => {
+						const current =
+							this.app.workspace.getActiveViewOfType(MarkdownView);
+						if (!current || current.file?.path !== file.path) return;
+						// Cache the result so the next call succeeds synchronously
+						this.cachedSourceContent = text;
+						this.scheduleFootnoteProcessing();
+					});
 				}
-
-				if (baseId && !footnoteDefMap.has(baseId)) {
-					footnoteDefMap.set(baseId, li);
-				}
-			}
-
-			if (footnoteDefMap.size === 0) {
-				// Definitions not rendered yet — schedule retry
-				this.scheduleFootnoteProcessing();
-				// Don't return — there may be HTML sidenotes too
 				if (!useHtmlSidenotes) return;
 			}
 
-			// Now find all footnote references
+			const definitions = this.parseFootnoteDefinitions(sourceContent);
+
+			// console.log(
+			// 	"[Sidenotes] Source content length:",
+			// 	sourceContent.length,
+			// 	"| Definitions found:",
+			// 	definitions.size,
+			// 	"| Keys:",
+			// 	Array.from(definitions.keys()),
+			// );
+
+			if (definitions.size === 0) {
+				if (!useHtmlSidenotes) return;
+			}
+
+			// Find all footnote references in the rendered HTML
 			const footnoteSups = readingRoot.querySelectorAll<HTMLElement>(
-				"sup.footnote-ref, sup[class*='footnote']",
+				// Obsidian preview often uses sup#fnref-* with a.footnote-link
+				"sup.footnote-ref, sup[class*='footnote'], sup[id^='fnref-'], sup[data-footnote-id], a.footnote-link",
 			);
 
 			const processedBaseIds = new Set<string>();
 
+			// console.log(
+			// 	"[Sidenotes] Found footnote sups in DOM:",
+			// 	footnoteSups.length,
+			// 	"| Elements:",
+			// 	Array.from(footnoteSups).map((el) => ({
+			// 		tag: el.tagName,
+			// 		id: el.id,
+			// 		class: el.className,
+			// 		dataFootnoteId: el.dataset.footnoteId,
+			// 		text: el.textContent?.trim(),
+			// 	})),
+			// );
+
 			for (const sup of Array.from(footnoteSups)) {
 				if (sup.closest(".sidenote-number")) continue;
+				// Skip elements inside the footnotes section (these are backrefs, not refs)
+				if (sup.closest("section.footnotes, .footnotes")) continue;
 
-				// Try multiple ways to get the footnote ID
+				// Try multiple ways to extract the base footnote ID
 				const supId = sup.dataset.footnoteId || sup.id || "";
-
-				// Also check the anchor inside the sup
 				const anchor = sup.querySelector("a");
 				const anchorHref = anchor?.getAttribute("href") || "";
 				const anchorId = anchor?.id || "";
 
-				// Extract base ID from any available source
 				let baseId: string | null = null;
 
-				// Try from sup ID/data attribute: fnref-1-hash or fnref-1
+				// Try from sup ID/data: fnref-1-hash or fnref-1
 				for (const rawId of [supId, anchorId]) {
 					if (!rawId) continue;
 					const hashMatch = rawId.match(/^fnref-(.+?)-[a-f0-9]+$/i);
-					if (hashMatch && hashMatch[1]) {
+					if (hashMatch?.[1]) {
 						baseId = hashMatch[1];
 						break;
 					}
 					const simpleMatch = rawId.match(/^fnref-(.+)$/i);
-					if (simpleMatch && simpleMatch[1]) {
+					if (simpleMatch?.[1]) {
 						baseId = simpleMatch[1];
 						break;
 					}
@@ -1256,22 +1316,22 @@ export default class SidenotePlugin extends Plugin {
 
 				// Try from href: #fn-1-hash or #fn-1
 				if (!baseId && anchorHref) {
-					const hrefHashMatch = anchorHref.match(/#fn-(.+?)-[a-f0-9]+$/i);
-					if (hrefHashMatch && hrefHashMatch[1]) {
-						baseId = hrefHashMatch[1];
+					const hrefMatch = anchorHref.match(/#fn-(.+?)-[a-f0-9]+$/i);
+					if (hrefMatch?.[1]) {
+						baseId = hrefMatch[1];
 					} else {
-						const hrefSimpleMatch = anchorHref.match(/#fn-(.+)$/i);
-						if (hrefSimpleMatch && hrefSimpleMatch[1]) {
-							baseId = hrefSimpleMatch[1];
+						const hrefSimple = anchorHref.match(/#fn-(.+)$/i);
+						if (hrefSimple?.[1]) {
+							baseId = hrefSimple[1];
 						}
 					}
 				}
 
-				// Last resort: try to extract a number from the sup text content
+				// Last resort: use the displayed number text
 				if (!baseId) {
 					const supText = sup.textContent?.trim() || "";
-					const numMatch = supText.match(/^(\d+)$/);
-					if (numMatch && numMatch[1]) {
+					const numMatch = supText.match(/^\[?(\d+)\]?$/);
+					if (numMatch?.[1]) {
 						baseId = numMatch[1];
 					}
 				}
@@ -1279,28 +1339,14 @@ export default class SidenotePlugin extends Plugin {
 				if (!baseId || processedBaseIds.has(baseId)) continue;
 				processedBaseIds.add(baseId);
 
-				// Look up the definition using the base ID
-				const footnoteLi = footnoteDefMap.get(baseId);
-				if (!footnoteLi) continue;
-
-				// Create a container to hold the footnote content
-				const contentContainer = document.createElement("span");
-
-				const paragraph = footnoteLi.querySelector("p");
-				const sourceElement = paragraph ?? footnoteLi;
-
-				for (const child of Array.from(sourceElement.childNodes)) {
-					const cloned = child.cloneNode(true);
-					contentContainer.appendChild(cloned);
-				}
-
-				// Remove backref links
-				contentContainer
-					.querySelectorAll("a.footnote-backref, a[href^='#fnref']")
-					.forEach((el) => el.remove());
-
-				const footnoteText = contentContainer.textContent?.trim();
+				// Look up definition from SOURCE markdown
+				const footnoteText = definitions.get(baseId);
 				if (!footnoteText) continue;
+
+				// For footnotes, hide the original [1] link
+				if (anchor && this.settings.hideFootnoteNumbers) {
+					anchor.classList.add("sidenote-fn-link-hidden");
+				}
 
 				allItems.push({
 					el: sup,
@@ -1308,7 +1354,7 @@ export default class SidenotePlugin extends Plugin {
 					type: "footnote",
 					text: footnoteText,
 					footnoteId: baseId,
-					footnoteHtml: contentContainer,
+					// No footnoteHtml — render from source text instead
 				});
 			}
 		}
@@ -1318,30 +1364,19 @@ export default class SidenotePlugin extends Plugin {
 			return;
 		}
 
-		// Filter out items that haven't been laid out yet
-		const validItems = allItems.filter((item) => {
-			return item.rect.width > 0 && item.rect.height > 0;
-		});
-
-		if (validItems.length === 0) {
-			// Elements not laid out yet — retry
-			if (useFootnotes) {
-				this.scheduleFootnoteProcessing();
-			}
-			return;
-		}
-
 		readingRoot.dataset.hasSidenotes = "true";
 
-		// Sort by vertical position in document
-		validItems.sort((a, b) => a.rect.top - b.rect.top);
+		// Sort by vertical position. Items with valid rects sort by top position;
+		// items with zero rects (not yet laid out) sort by their DOM order,
+		// which querySelectorAll already preserves.
+		allItems.sort((a, b) => a.rect.top - b.rect.top);
 
 		// Start numbering from 1
 		let num = 1;
 
 		const marginNotes: HTMLElement[] = [];
 
-		for (const item of validItems) {
+		for (const item of allItems) {
 			if (this.settings.resetNumberingPerHeading) {
 				const heading = this.findPrecedingHeading(item.el);
 				if (heading) {
@@ -1354,7 +1389,12 @@ export default class SidenotePlugin extends Plugin {
 				}
 			}
 
-			const numStr = this.formatNumber(num++);
+			// For footnotes, use the footnote's own ID as the number
+			// (so [^3] always displays as "3" regardless of which refs are visible).
+			// For HTML sidenotes, use the sequential counter.
+			const numStr = item.footnoteId
+				? item.footnoteId
+				: this.formatNumber(num++);
 
 			const wrapper = document.createElement("span");
 			wrapper.className = "sidenote-number";
@@ -1376,14 +1416,10 @@ export default class SidenotePlugin extends Plugin {
 					anchor.classList.add("sidenote-fn-link-hidden");
 				}
 
-				// Clone the HTML content from the footnote, preserving formatting
-				if (item.footnoteHtml) {
-					this.cloneContentToMargin(item.footnoteHtml, margin);
-				} else {
-					margin.appendChild(
-						this.renderLinksToFragment(this.normalizeText(item.text)),
-					);
-				}
+				// Render from source markdown text
+				margin.appendChild(
+					this.renderLinksToFragment(this.normalizeText(item.text)),
+				);
 
 				margin.dataset.editing = "false";
 
@@ -1462,13 +1498,27 @@ export default class SidenotePlugin extends Plugin {
 			marginNotes.push(margin);
 		}
 
-		// Run collision avoidance after DOM is fully settled
+		// Run positioning after DOM is fully settled and elements are laid out.
+		// We defer twice: once to let the browser insert elements, once to lay them out.
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
 				if (!readingRoot.isConnected) return;
 
-				// Force reflow to ensure line offsets are applied
+				// Force reflow
 				void readingRoot.offsetHeight;
+
+				// Recompute line offsets now that elements are actually laid out
+				const wrappers = readingRoot.querySelectorAll<HTMLElement>(
+					"span.sidenote-number",
+				);
+				for (const wrapper of Array.from(wrappers)) {
+					const margin = wrapper.querySelector<HTMLElement>(
+						"small.sidenote-margin",
+					);
+					if (margin) {
+						this.applyLineOffset(wrapper, margin, false);
+					}
+				}
 
 				// Calculate and apply sidenote positioning
 				this.updateSidenotePositioning(readingRoot, true);
@@ -1482,18 +1532,10 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	private scheduleFootnoteProcessing() {
+		// console.log("[Sidenotes] scheduleFootnoteProcessing called");
 		// Debounce multiple calls
 		if (this.footnoteProcessingTimer !== null) {
 			window.clearTimeout(this.footnoteProcessingTimer);
-		}
-
-		// Don't retry indefinitely
-		if (
-			this.footnoteProcessingRetries >=
-			SidenotePlugin.MAX_FOOTNOTE_PROCESSING_RETRIES
-		) {
-			this.footnoteProcessingRetries = 0;
-			return;
 		}
 
 		this.footnoteProcessingTimer = window.setTimeout(() => {
@@ -1505,29 +1547,34 @@ export default class SidenotePlugin extends Plugin {
 			const readingRoot = view.containerEl.querySelector<HTMLElement>(
 				".markdown-reading-view",
 			);
-			if (!readingRoot) return;
+			if (!readingRoot) {
+				// console.log(
+				// 	"[Sidenotes] scheduleFootnoteProcessing: no readingRoot found",
+				// );
+				return;
+			}
 
-			// Check if we have both refs and definitions
-			const hasRefs =
-				readingRoot.querySelectorAll(
-					"sup.footnote-ref, sup[data-footnote-id]",
-				).length > 0;
+			// Only require refs in DOM (defs may be virtualized away)
+			const refElements = readingRoot.querySelectorAll(
+				"sup.footnote-ref, sup[data-footnote-id], sup[id^='fnref-'], a.footnote-link",
+			);
+			const hasRefs = refElements.length > 0;
 
-			const hasDefs =
-				readingRoot.querySelectorAll("section.footnotes li, .footnotes li")
-					.length > 0;
+			// console.log(
+			// 	"[Sidenotes] scheduleFootnoteProcessing: hasRefs =",
+			// 	hasRefs,
+			// 	"| refCount =",
+			// 	refElements.length,
+			// );
 
-			if (hasRefs && hasDefs) {
+			if (hasRefs) {
 				requestAnimationFrame(() => {
 					requestAnimationFrame(() => {
 						this.processReadingModeSidenotes(readingRoot);
 					});
 				});
-			} else if (hasRefs) {
-				// Refs exist but no definitions yet - try again later
-				this.scheduleFootnoteProcessing();
 			}
-		}, 200); // Longer delay to allow footnotes section to render
+		}, 100);
 	}
 
 	/**
@@ -1558,16 +1605,23 @@ export default class SidenotePlugin extends Plugin {
 				`${lineOffset}px`,
 			);
 		} else {
-			// Reading mode: find the positioned ancestor (p, li, etc.)
-			const positionedParent = wrapper.offsetParent as HTMLElement | null;
+			// Reading mode: anchor to the nearest positioning context that *you* define in CSS
+			const positionedParent =
+				(wrapper.closest(
+					"p, li, h1, h2, h3, h4, h5, h6, blockquote, .callout",
+				) as HTMLElement | null) ??
+				(wrapper.parentElement as HTMLElement | null);
+
 			if (!positionedParent) return;
 
-			// Get the wrapper's position relative to its offset parent
-			const wrapperRect = wrapper.getBoundingClientRect();
-			const parentRect = positionedParent.getBoundingClientRect();
+			// For inline content, prefer the first line box rect (more stable than getBoundingClientRect)
+			const rects = wrapper.getClientRects();
+			const wrapperRect = rects.length > 0 ? rects.item(0) : null;
+			const effectiveWrapperRect =
+				wrapperRect ?? wrapper.getBoundingClientRect();
 
-			// Calculate the offset from the top of the parent to the wrapper
-			const lineOffset = wrapperRect.top - parentRect.top;
+			const parentRect = positionedParent.getBoundingClientRect();
+			const lineOffset = effectiveWrapperRect.top - parentRect.top;
 
 			margin.style.setProperty(
 				"--sidenote-line-offset",
@@ -1588,8 +1642,10 @@ export default class SidenotePlugin extends Plugin {
 			// Find the original element inside
 			const sidenoteSpan =
 				wrapper.querySelector<HTMLElement>("span.sidenote");
-			const footnoteSup =
-				wrapper.querySelector<HTMLElement>("sup.footnote-ref");
+			const footnoteSup = wrapper.querySelector<HTMLElement>(
+				"sup.footnote-ref, sup[class*='footnote'], sup[data-footnote-id]",
+			);
+
 			const originalEl = sidenoteSpan ?? footnoteSup;
 
 			// Restore footnote link visibility if needed
@@ -1815,6 +1871,12 @@ export default class SidenotePlugin extends Plugin {
 
 		const content = editor.getValue();
 
+		// Cache source content for reading mode
+		// (view.editor.getValue() can return "" in reading mode)
+		if (content) {
+			this.cachedSourceContent = content;
+		}
+
 		if (this.settings.sidenoteFormat === "html") {
 			this.documentHasSidenotes = SIDENOTE_PATTERN.test(content);
 			SIDENOTE_PATTERN.lastIndex = 0;
@@ -2025,11 +2087,48 @@ export default class SidenotePlugin extends Plugin {
 			readingScroller.addEventListener("scroll", onReadingScroll, {
 				passive: true,
 			});
+			// Re-process reading mode when Obsidian virtualizes/mounts new preview DOM
+			const readingContent =
+				readingRoot.querySelector<HTMLElement>(
+					".markdown-preview-sizer",
+				) ?? readingRoot;
+
+			let readingMutationTimer: number | null = null;
+
+			const readingMo = new MutationObserver((mutations) => {
+				// Skip while margin editing (prevents flicker)
+				if (this.isEditingMargin) return;
+
+				// Only react to added/removed nodes; characterData churn can be noisy
+				let relevant = false;
+				for (const m of mutations) {
+					if (m.type !== "childList") continue;
+					if (m.addedNodes.length || m.removedNodes.length) {
+						relevant = true;
+						break;
+					}
+				}
+				if (!relevant) return;
+
+				if (readingMutationTimer !== null)
+					window.clearTimeout(readingMutationTimer);
+				readingMutationTimer = window.setTimeout(() => {
+					readingMutationTimer = null;
+					// This will now run even if <section.footnotes> is not mounted
+					this.scheduleFootnoteProcessing();
+				}, 75);
+			});
+
+			readingMo.observe(readingContent, {
+				childList: true,
+				subtree: true,
+			});
+
 			this.cleanups.push(() => {
-				readingScroller.removeEventListener("scroll", onReadingScroll);
-				if (this.readingModeScrollTimer !== null) {
-					window.clearTimeout(this.readingModeScrollTimer);
-					this.readingModeScrollTimer = null;
+				readingMo.disconnect();
+				if (readingMutationTimer !== null) {
+					window.clearTimeout(readingMutationTimer);
+					readingMutationTimer = null;
 				}
 			});
 		}
@@ -3421,7 +3520,7 @@ export default class SidenotePlugin extends Plugin {
 				!e.shiftKey &&
 				!e.altKey
 			) {
-				console.warn("BOLD shortcut detected");
+				// console.warn("BOLD shortcut detected");
 				e.preventDefault();
 				e.stopImmediatePropagation();
 				this.insertMarkdownWrapper(margin, "**");
@@ -3434,7 +3533,7 @@ export default class SidenotePlugin extends Plugin {
 				!e.shiftKey &&
 				!e.altKey
 			) {
-				console.warn("ITALICS shortcut detected");
+				// console.warn("ITALICS shortcut detected");
 				e.preventDefault();
 				e.stopImmediatePropagation();
 				this.insertMarkdownWrapper(margin, "*");
