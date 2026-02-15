@@ -219,6 +219,20 @@
 	> .cm-scroller
 	> .cm-content {
 	display: block !important;
+	width: 100% !important;
+	min-width: 0 !important;
+	box-sizing: border-box !important;
+}
+
+.sidenote-margin[data-editing="true"]
+	> .cm-editor
+	> .cm-scroller
+	> .cm-content
+	> .cm-line {
+	width: 100% !important;
+	min-width: 0 !important;
+	word-break: break-word !important;
+	white-space: pre-wrap !important;
 }
 
 .sidenote-margin[data-editing="true"] > .cm-editor > .cm-announced {
