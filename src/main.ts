@@ -1114,6 +1114,84 @@ export default class SidenotePlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Correct per-wrapper --sidenote-offset for sidenotes inside indented
+	 * containers (li, blockquote, callout).  Called AFTER updateSidenotePositioning
+	 * so that the global --sidenote-offset on the root is already set.
+	 *
+	 * Uses the SAME refLine search logic as updateSidenotePositioning to
+	 * guarantee consistency. The global offset positions sidenotes relative
+	 * to refLine. For wrappers inside an indented parent, position:absolute
+	 * resolves against that parent instead, so we compute a per-wrapper
+	 * offset that compensates for the difference.
+	 */
+	private correctIndentedSidenotePositions(root: HTMLElement) {
+		const position = this.settings.sidenotePosition;
+
+		// Read the global offset that updateSidenotePositioning just set
+		const globalOffset =
+			parseFloat(root.style.getPropertyValue("--sidenote-offset")) || 0;
+
+		// Find the SAME reference element updateSidenotePositioning used
+		const sizer = root.querySelector<HTMLElement>(
+			".markdown-preview-sizer",
+		);
+		if (!sizer) return;
+
+		let refEl: HTMLElement | null = null;
+		const sections = sizer.querySelectorAll<HTMLElement>(":scope > div");
+		for (const section of Array.from(sections)) {
+			if (section.offsetHeight === 0) continue;
+			const candidate = section.querySelector<HTMLElement>(
+				":scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
+			);
+			if (candidate && candidate.offsetHeight > 0) {
+				refEl = candidate;
+				break;
+			}
+		}
+		if (!refEl) return;
+
+		const refRect = refEl.getBoundingClientRect();
+
+		const wrappers = root.querySelectorAll<HTMLElement>(
+			"span.sidenote-number",
+		);
+
+		for (const wrapper of Array.from(wrappers)) {
+			const indentedParent = wrapper.closest(
+				"li, blockquote, .callout-content",
+			) as HTMLElement | null;
+
+			if (!indentedParent) {
+				// Not indented — inherit the global offset
+				wrapper.style.removeProperty("--sidenote-offset");
+				continue;
+			}
+
+			const parentRect = indentedParent.getBoundingClientRect();
+
+			if (position === "left") {
+				// Global offset is relative to refEl's left edge.
+				// This wrapper resolves position:absolute against indentedParent.
+				// Shift = how much further right the parent is vs refEl.
+				const shift = parentRect.left - refRect.left;
+				wrapper.style.setProperty(
+					"--sidenote-offset",
+					`${globalOffset - shift}px`,
+				);
+			} else {
+				// Global offset is relative to refEl's right edge.
+				// Shift = how much further left the parent's right edge is vs refEl.
+				const shift = refRect.right - parentRect.right;
+				wrapper.style.setProperty(
+					"--sidenote-offset",
+					`${globalOffset - shift}px`,
+				);
+			}
+		}
+	}
+
 	// ==================== Number Formatting ====================
 
 	private formatNumber(num: number): string {
@@ -1176,13 +1254,22 @@ export default class SidenotePlugin extends Plugin {
 		);
 		if (!readingRoot) return;
 
-		// If sidenotes are already built and the source hasn't changed, skip.
-		const existingMargins = readingRoot.querySelectorAll(
-			"small.sidenote-margin",
-		).length;
-		if (existingMargins > 0 && !this.needsReadingModeRefresh) {
+		// Check if there are footnote refs or sidenote spans not yet wrapped
+		const unwrappedFootnotes = readingRoot.querySelectorAll(
+			"sup.footnote-ref:not(.sidenote-number sup), sup[id^='fnref-']:not(.sidenote-number sup), sup[data-footnote-id]:not(.sidenote-number sup)",
+		);
+		const unwrappedSpans = readingRoot.querySelectorAll(
+			"span.sidenote:not(.sidenote-number span.sidenote)",
+		);
+		const hasUnwrapped =
+			unwrappedFootnotes.length > 0 || unwrappedSpans.length > 0;
+
+		// Skip only if no forced refresh AND nothing new to process
+		if (!this.needsReadingModeRefresh && !hasUnwrapped) {
 			return;
 		}
+
+		const isFullRefresh = this.needsReadingModeRefresh;
 		this.needsReadingModeRefresh = false;
 
 		// console.log("[Sidenotes] processReadingModeSidenotes called");
@@ -1212,38 +1299,18 @@ export default class SidenotePlugin extends Plugin {
 			return;
 		}
 
-		// First, remove any existing sidenote markup in the reading root to start fresh
-		this.removeAllSidenoteMarkupFromReadingMode(readingRoot);
+		// Only do full teardown on explicit refresh (file change, settings change).
+		// For incremental processing (new sections scrolled into view), keep
+		// existing sidenotes and only wrap the new unwrapped refs.
+		if (isFullRefresh) {
+			this.removeAllSidenoteMarkupFromReadingMode(readingRoot);
+		}
 
 		const sizer =
 			readingRoot.querySelector<HTMLElement>(".markdown-preview-sizer") ??
 			readingRoot;
 
 		const sizerRect = sizer.getBoundingClientRect();
-
-		// Baseline element that represents the main body text column.
-		// Walk sizer's direct child <div>s to find a visible top-level <p>.
-		// This avoids picking an element inside a blockquote or nested list
-		// that has a different left offset.
-		let baselineEl: HTMLElement | null = null;
-		const sections = sizer.querySelectorAll<HTMLElement>(":scope > div");
-		for (const section of Array.from(sections)) {
-			if (section.offsetHeight === 0) continue;
-			const candidate = section.querySelector<HTMLElement>(
-				":scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6",
-			);
-			if (candidate && candidate.offsetHeight > 0) {
-				baselineEl = candidate;
-				break;
-			}
-		}
-		if (!baselineEl) {
-			baselineEl = sizer;
-		}
-
-		const baselineRect = baselineEl.getBoundingClientRect();
-		const baselineX = baselineRect.left - sizerRect.left;
-		const baselineRight = baselineRect.right;
 
 		// Collect items based on the sidenoteFormat setting
 		// Note: footnoteHtml is optional and only used for footnotes
@@ -1539,42 +1606,10 @@ export default class SidenotePlugin extends Plugin {
 			wrapper.appendChild(item.el);
 			wrapper.appendChild(margin);
 
-			// Reading mode: correct horizontal offset so indented containers
-			// (lists, blockquotes, callouts) don't shift the sidenote column.
-			const indentedParent = wrapper.closest(
-				"li, blockquote, .callout-content",
-			) as HTMLElement | null;
-
-			if (indentedParent) {
-				const parentRect = indentedParent.getBoundingClientRect();
-
-				if (this.settings.sidenotePosition === "left") {
-					const parentX = parentRect.left - sizerRect.left;
-					const indentPx = parentX - baselineX;
-					if (Math.abs(indentPx) > 0.5) {
-						wrapper.style.setProperty(
-							"--sidenote-offset",
-							`calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)) - ${indentPx}px)`,
-						);
-					} else {
-						wrapper.style.removeProperty("--sidenote-offset");
-					}
-				} else {
-					// For right positioning, use right edges
-					const parentRight = parentRect.right;
-					const indentPx = baselineRight - parentRight;
-					if (Math.abs(indentPx) > 0.5) {
-						wrapper.style.setProperty(
-							"--sidenote-offset",
-							`calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)) - ${indentPx}px)`,
-						);
-					} else {
-						wrapper.style.removeProperty("--sidenote-offset");
-					}
-				}
-			} else {
-				wrapper.style.removeProperty("--sidenote-offset");
-			}
+			// Per-item horizontal correction for indented parents is deferred
+			// to correctIndentedSidenotePositions() in the RAF block below,
+			// which runs after updateSidenotePositioning() so both use the
+			// same reference element.
 
 			// Calculate line offset: how far down from the positioned parent is this reference?
 			this.applyLineOffset(wrapper, margin, false);
@@ -1608,10 +1643,18 @@ export default class SidenotePlugin extends Plugin {
 				// Calculate and apply global sidenote positioning
 				this.updateSidenotePositioning(readingRoot, true);
 
-				this.resolveCollisions(
-					marginNotes.filter((m) => m.isConnected),
-					this.settings.collisionSpacing,
-				);
+				// Correct per-wrapper offset for indented parents
+				this.correctIndentedSidenotePositions(readingRoot);
+
+				// Use all margins in the DOM (not just newly created ones)
+				// so that collisions between old and new sidenotes are resolved.
+				const allMargins = Array.from(
+					readingRoot.querySelectorAll<HTMLElement>(
+						"small.sidenote-margin",
+					),
+				).filter((m) => m.isConnected);
+
+				this.resolveCollisions(allMargins, this.settings.collisionSpacing);
 			});
 		});
 	}
@@ -2101,6 +2144,29 @@ export default class SidenotePlugin extends Plugin {
 		);
 
 		requestAnimationFrame(() => cm.focus());
+
+		// Watch for editor height changes and re-run collision avoidance
+		const resizeObs = new ResizeObserver(() => {
+			const readingRoot = this.app.workspace
+				.getActiveViewOfType(MarkdownView)
+				?.containerEl.querySelector<HTMLElement>(".markdown-reading-view");
+			if (!readingRoot) return;
+
+			const allMargins = Array.from(
+				readingRoot.querySelectorAll<HTMLElement>("small.sidenote-margin"),
+			).filter((m) => m.isConnected);
+
+			this.resolveCollisions(allMargins, this.settings.collisionSpacing);
+		});
+
+		resizeObs.observe(cm.dom);
+
+		// Chain onto existing cleanup so teardown disconnects the observer
+		const prevCleanup = snMargin._sidenoteCleanup;
+		snMargin._sidenoteCleanup = () => {
+			resizeObs.disconnect();
+			if (prevCleanup) prevCleanup();
+		};
 	}
 
 	/**
@@ -2150,6 +2216,20 @@ export default class SidenotePlugin extends Plugin {
 		margin.appendChild(
 			this.renderLinksToFragment(this.normalizeText(renderText)),
 		);
+
+		// Re-run collision avoidance since the margin height changed
+		requestAnimationFrame(() => {
+			const readingRoot = this.app.workspace
+				.getActiveViewOfType(MarkdownView)
+				?.containerEl.querySelector<HTMLElement>(".markdown-reading-view");
+			if (!readingRoot) return;
+
+			const allMargins = Array.from(
+				readingRoot.querySelectorAll<HTMLElement>("small.sidenote-margin"),
+			).filter((m) => m.isConnected);
+
+			this.resolveCollisions(allMargins, this.settings.collisionSpacing);
+		});
 
 		// Restore click cursor if editing is enabled
 		if (this.settings.editInReadingMode) {
@@ -2387,7 +2467,7 @@ export default class SidenotePlugin extends Plugin {
 			if (mode !== "hidden" && hasMargins) {
 				requestAnimationFrame(() => {
 					this.updateSidenotePositioning(readingRoot, true);
-
+					this.correctIndentedSidenotePositions(readingRoot);
 					this.updateReadingModeCollisions();
 				});
 			}
@@ -3548,8 +3628,17 @@ export default class SidenotePlugin extends Plugin {
 
 		if (items.length === 0) return;
 
-		// Step 4: Sort by anchor position (document order)
-		items.sort((a, b) => a.anchorY - b.anchorY);
+		// Step 4: Sort by DOM order, not measured position.
+		// Using rect.top can produce wrong order during layout transitions
+		// (e.g. after editing a sidenote that changes height). DOM order
+		// always reflects source order because decorations are sorted by
+		// document position.
+		items.sort((a, b) => {
+			const pos = a.el.compareDocumentPosition(b.el);
+			if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+			if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+			return 0;
+		});
 
 		// Step 5: Greedily assign positions to avoid collisions
 		// Track where the next available vertical position is
@@ -4830,6 +4919,8 @@ const sidenoteEditorTheme = EditorView.theme({
 		fontFamily: "inherit !important",
 		fontSize: "inherit !important",
 		lineHeight: "inherit !important",
+		caretColor:
+			"var(--caret-color, var(--text-accent, var(--text-normal))) !important",
 	},
 	"& .cm-content[contenteditable]": {
 		padding: "2px 0 !important",
@@ -4848,13 +4939,13 @@ const sidenoteEditorTheme = EditorView.theme({
 		border: "none !important",
 	},
 	"& .cm-cursor": {
-		borderLeftColor: "var(--text-normal) !important",
+		borderLeftColor: "var(--caret-color, var(--text-normal)) !important",
 	},
 	"&.cm-focused": {
 		outline: "none !important",
 	},
 	"&.cm-focused .cm-cursor": {
-		borderLeftColor: "var(--text-normal) !important",
+		borderLeftColor: "var(--caret-color, var(--text-normal)) !important",
 	},
 	"& .cm-activeLineGutter": {
 		backgroundColor: "transparent !important",
