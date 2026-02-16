@@ -98,9 +98,12 @@
 	.cm-line
 	.sidenote-number[data-footnote-id]
 	.sidenote-margin {
-	left: var(
-		--sidenote-offset,
-		calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)))
+	left: calc(
+		var(
+				--sidenote-offset,
+				calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)))
+			) -
+			var(--sidenote-indent-adjust, 0px)
 	);
 	right: auto;
 	text-align: var(--sn-text-align, right);
@@ -114,9 +117,12 @@
 	.cm-line
 	.sidenote-number[data-footnote-id]
 	.sidenote-margin {
-	right: var(
-		--sidenote-offset,
-		calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)))
+	right: calc(
+		var(
+				--sidenote-offset,
+				calc(-1 * (var(--sidenote-width) + var(--sidenote-gap)))
+			) +
+			var(--sidenote-indent-adjust, 0px)
 	);
 	left: auto;
 	text-align: var(--sn-text-align, left);

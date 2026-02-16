@@ -183,7 +183,7 @@ export default class SidenotePlugin extends Plugin {
 
 	private footnoteProcessingTimer: number | null = null;
 	private footnoteProcessingRetries = 0;
-	private needsReadingModeRefresh = true;
+	public needsReadingModeRefresh = true;
 
 	private pendingFootnoteEdit: string | null = null;
 	private pendingFootnoteEditRetries = 0;
@@ -1264,8 +1264,38 @@ export default class SidenotePlugin extends Plugin {
 		const hasUnwrapped =
 			unwrappedFootnotes.length > 0 || unwrappedSpans.length > 0;
 
-		// Skip only if no forced refresh AND nothing new to process
+		const hasAnyMargins =
+			readingRoot.querySelector("small.sidenote-margin") !== null;
+
+		// If nothing new to wrap and no full refresh needed, still recompute positioning.
+		// This is required when settings like sidenoteAnchor / sidenotePosition change.
 		if (!this.needsReadingModeRefresh && !hasUnwrapped) {
+			if (hasAnyMargins) {
+				requestAnimationFrame(() => {
+					if (!readingRoot.isConnected) return;
+
+					// Force reflow so measurements are accurate
+					void readingRoot.offsetHeight;
+
+					// Re-apply global offset based on current settings (text vs edge)
+					this.updateSidenotePositioning(readingRoot, true);
+
+					// Re-apply per-wrapper corrections (li/blockquote/callout)
+					this.correctIndentedSidenotePositions(readingRoot);
+
+					// Optional but usually good: re-resolve collisions
+					const allMargins = Array.from(
+						readingRoot.querySelectorAll<HTMLElement>(
+							"small.sidenote-margin",
+						),
+					).filter((m) => m.isConnected);
+
+					this.resolveCollisions(
+						allMargins,
+						this.settings.collisionSpacing,
+					);
+				});
+			}
 			return;
 		}
 
@@ -4320,6 +4350,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "html" | "footnote-edit") => {
 						this.plugin.settings.sidenoteFormat = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4336,6 +4368,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.hideFootnotes = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4350,6 +4384,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.hideFootnoteNumbers = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4368,6 +4404,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "left" | "right") => {
 						this.plugin.settings.sidenotePosition = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4380,6 +4418,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.showSidenoteNumbers = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4395,6 +4435,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "arabic" | "roman" | "letters") => {
 						this.plugin.settings.numberStyle = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4410,6 +4452,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "plain" | "neumorphic" | "pill") => {
 						this.plugin.settings.numberBadgeStyle = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 		new Setting(containerEl)
@@ -4424,6 +4468,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.numberColor = value.trim();
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4442,6 +4488,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "text" | "edge") => {
 						this.plugin.settings.sidenoteAnchor = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4456,6 +4504,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.minSidenoteWidth = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4470,6 +4520,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.maxSidenoteWidth = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4486,6 +4538,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.sidenoteGap = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4502,6 +4556,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.sidenoteGap2 = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4518,6 +4574,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.pageOffsetFactor = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4535,6 +4593,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 						if (!isNaN(num) && num > 0) {
 							this.plugin.settings.hideBelow = num;
 							await this.plugin.saveSettings();
+							this.plugin.needsReadingModeRefresh = true;
+							this.plugin.forceReadingModeRefreshPublic();
 						}
 					}),
 			);
@@ -4551,6 +4611,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 						if (!isNaN(num) && num > 0) {
 							this.plugin.settings.compactBelow = num;
 							await this.plugin.saveSettings();
+							this.plugin.needsReadingModeRefresh = true;
+							this.plugin.forceReadingModeRefreshPublic();
 						}
 					}),
 			);
@@ -4569,6 +4631,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 						if (!isNaN(num) && num > 0) {
 							this.plugin.settings.fullAbove = num;
 							await this.plugin.saveSettings();
+							this.plugin.needsReadingModeRefresh = true;
+							this.plugin.forceReadingModeRefreshPublic();
 						}
 					}),
 			);
@@ -4586,6 +4650,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.fontSize = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4600,6 +4666,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.fontSizeCompact = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4614,6 +4682,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.lineHeight = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4629,6 +4699,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value: "left" | "right" | "justify") => {
 						this.plugin.settings.textAlignment = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4645,6 +4717,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.collisionSpacing = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4657,6 +4731,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.enableTransitions = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4669,6 +4745,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.resetNumberingPerHeading = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
 
@@ -4683,6 +4761,8 @@ class SidenoteSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.editInReadingMode = value;
 						await this.plugin.saveSettings();
+						this.plugin.needsReadingModeRefresh = true;
+						this.plugin.forceReadingModeRefreshPublic();
 						this.plugin.forceReadingModeRefreshPublic();
 					}),
 			);
