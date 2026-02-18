@@ -2026,9 +2026,9 @@ export default class SidenotePlugin extends Plugin {
 	private getFootnoteSourceText(footnoteId: string): string | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const content =
+			this.cachedSourceContent ||
 			view?.editor?.getValue() ||
 			(view as any)?.data ||
-			this.cachedSourceContent ||
 			"";
 		if (!content) return null;
 
@@ -2379,6 +2379,32 @@ export default class SidenotePlugin extends Plugin {
 				this.readingCmFootnoteId,
 				newText,
 			);
+
+			// Immediately patch the cached source content so that
+			// clicking the sidenote again reads the new text, rather
+			// than waiting for the async file write to propagate.
+			if (this.cachedSourceContent) {
+				const escapedId = this.readingCmFootnoteId.replace(
+					/[.*+?^${}()|[\]\\]/g,
+					"\\$&",
+				);
+				const regex = new RegExp(
+					`^(\\[\\^${escapedId}\\]:\\s*)(.+(?:\\n(?:[ \\t]+.+)*)?)$`,
+					"gm",
+				);
+				const match = regex.exec(this.cachedSourceContent);
+				if (match) {
+					const prefix = match[1] ?? "";
+					const before = this.cachedSourceContent.slice(
+						0,
+						match.index + prefix.length,
+					);
+					const after = this.cachedSourceContent.slice(
+						match.index + match[0].length,
+					);
+					this.cachedSourceContent = before + newText + after;
+				}
+			}
 		}
 
 		// NOW clear the editing flag
@@ -4821,7 +4847,7 @@ class SidenoteSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Sidenote hover color")
 			.setDesc(
-				"Color for sidenote text on hover. Leave empty to use Obsidian's default *muted text* color.",
+				"Color for sidenote text *on hover*. Leave empty to use Obsidian's default *muted text* color.",
 			)
 			.addText((text) =>
 				text
