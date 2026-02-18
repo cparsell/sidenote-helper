@@ -184,7 +184,7 @@
 }
 
 .sidenote-margin:hover {
-	/* color: var(--sn-hover-color, var(--text-muted)); */
+	color: var(--sn-hover-color, var(--text-muted));
 }
 
 .sidenote-margin[data-editing="true"] {
@@ -408,8 +408,8 @@
 	box-shadow: var(--sn-badge-shadow);
 }
 
-.sidenote-number:hover .sidenote-margin[data-editing="false"] {
-	color: var(--sn-hover-color, var(--text-accent));
+.sidenote-number:hover .sidenote-margin:not([data-editing="true"]) {
+	color: var(--sn-hover-color, var(--text-accent)) !important;
 }
 
 /* Brighten the inline number itself on hover */
