@@ -1,44 +1,52 @@
-# Sidenotes
+## Sidenotes
 
-I first discovered sidenotes, in a conscious way, on [Gwern.net](https://gwern.net/sidenote) which was referencing [Edward Tufte's conventions](https://edwardtufte.github.io/tufte-css/).
+I first discovered sidenotes, at least in a conscious way, on [Gwern.net](https://gwern.net/sidenote) which was referencing [Edward Tufte's conventions](https://edwardtufte.github.io/tufte-css/).
 
-My goal is to have the same sidenotes work in both Obsidian **and** the web published version of my notes.
+My goal is to have sidenotes work in **Obsidian** as well as my **notes published on the web**. More recently, I've started working on making it compatible with PDF export (still in progress)
 
 ![Sidenotes Basics](https://github.com/cparsell/sidenotes/blob/main/Screenshot2.png)
 _Basic sidenote capabilities demonstrated_
 
 ![Neumorphic badges](https://github.com/cparsell/sidenotes/blob/main/Screenshot-badges-multi.png)
-_An optional style that highlights references_
+_An optional style that highlights references._
 
 ![Neumorphic badges](https://github.com/cparsell/sidenotes/blob/main/Screen-Record-Editing.gif)
 _Editing a sidenote in the margin_
 
 ### Features
 
-- **Sidenotes**: Sidenotes are displayed in the margin of a note. Run command `Insert Sidenote` to start one.
+- **Sidenotes**: Sidenotes are displayed in the margin of an Obsidian note.
+  Run command `Insert Sidenote` to start one.
   - **External and Internal link support**
   - **Supports basic Markdown formatting:** **Bold**, _italic_, and `inline code`
-  - Sidenotes can be encoded using **footnotes** or an **HTML tag** `<span class="sidenote">`.
+  - Sidenotes can be configured to work one of two ways:
+    - **Markdown footnotes**: `This is a sentence[^1].`
+    - **an HTML tag**: `<span class="sidenote">`.
   - HTML Tag sidenotes work in _Editing_ and _Reading_ modes. When using footnotes, this currently only works in Reading Mode.
 
 - **They are editable in the margin**. Click on it, edit, and press enter.
 - **Dynamic styling**: Font size shrinks as horizontal space get smaller. At a certain breakpoint, sidenotes hide when a window gets too skinny.
+- **PDF Export**: This currently only works with HTML sidenotes. Footnotes are more complicated and will take time to (hopefully) figure that out
 - **Settings**:
   - Show sidenotes in left or right margin
   - Superscript numbers can be added to the text. The numbers increment automatically.
-  - Number styled as Arabic numbers, Roman, letters, or no numbers
+  - Numbers displayed as Arabic numbers, Roman letters, or no numbers
+  - Numbers styled as plain or with badges to highlight them a bit
   - Customize spacing to tweak how it takes up space in the margin
   - Customize font size, line height, text alignment, and color
 
 ### Goal Features
 
-- None - Submit any suggestions either as an [issue](https://github.com/cparsell/sidenotes/issues) or in [this Obsidian Forum post](https://forum.obsidian.md/t/plugin-sidenotes/110632/19).
+- ~~Option to hide original footnote numbers~~ (Needs to be confirmed to work for others)
+- Optional background color to sidenotes
+- Option to have non-numbered sidenotes - aka "margin notes"
+- Option for Sidenotes on both left and right margins (may only work with HTML, seems unlikely to allow coding like this with Markdown footnotes)
+- Option for style templates for multiple sidenotes types - e.g. one type has a background color, another does not.
+- Highlight the referencing _sentence_ in the main note text when hovering over a sidenote
 
-## Alternatives
+## Alternatives and inspirations
 
-These are some other strategies I've seen for sidenotes in Obsidian.
-
-- [FelixHT's Obsidian Sidenotes Plugin](https://github.com/FelixHT/obsidian_side_notes) - hasn't been updated in a while - one user reported it doesn't fully function any longer but I haven't tested it.
+- [FelixHT's Obsidian Sidenotes Plugin](https://github.com/FelixHT/obsidian_side_notes) - hasn't been updated in a while - one user reported it doesn't fully function any longer but I haven't tested it. I did build some of the functionality in my plugin based on this.
 - [SideNote Plugin](https://github.com/mofukuru/SideNote) allows you to add comments to a piece of text, and this is viewable in the side panel.
 - [crnkv/obsidian-sidenote-auto-adjust-module](https://github.com/crnkv/obsidian-sidenote-auto-adjust-module) ([forum post](https://forum.obsidian.md/t/css-snippet-sidenote-auto-adjust-module-four-styles-available/94495))
 - [Collapsible Sidenotes using a CSS trick](https://forum.obsidian.md/t/meta-post-common-css-hacks/1978/341)
@@ -50,35 +58,37 @@ These are some other strategies I've seen for sidenotes in Obsidian.
 
 ## Setup
 
-1. Add the plugin to Obsidian. If copying manually from this repo, you can copy the contents of `/sidenotes-helper/` into `your-vault/.obsidian/plugins/sidenotes-helper`.
-
+1. Add the plugin to Obsidian. If copying manually from this repo, you can copy the contents of `/sidenotes/` into `your-vault/.obsidian/plugins/sidenotes`.
 2. If copying manually, restart Obsidian and then enable the plugin in **Settings**.
-
-3. Choose some settings that make sense for you.
+3. **Configure the settings** how you like:
    - Choose **sidenote format**:
      - **Footnotes**: Traditional Markdown footnotes will become sidenotes
        - **Hide footnotes:** Choose if you want to hide the origina footnotes at the bottom of the note
        - **Hide footnote numbers:** Hide the original Markdown reference numbers in the note text - e.g. this: `[1]`
      - **HTML**: uses `<span>` elements to format the sidenotes. I originally designed using this because it was an easy way for me to set up CSS styles in Obsidian as well as CSS styles in my web-published notes
-   - Other style settings include:
-     - **Number style**: Try 'neumorphic badge' for numbers that are more visually identifiable
-     - **Minimum sidenote width**
-     - **Maximum sidenote width**
-     - **Minimum gap between sidenote and text**
-     - **Minimum gap between sidenote and editor edge**
-     - **Page offset factor**: How much the note text gets pushed over to make more space in the margin (it will only offset on notes that have sidenotes)
+   - **Number style**: Try 'neumorphic badge' for numbers that are more visually identifiable
+   - **Width & Spacing**:
+     - Minimum sidenote width
+     - Maximum sidenote width
+     - Minimum gap between sidenote and text
+     - Minimum gap between sidenote and editor edge
+   - **Page offset factor**: Make some room for the sidenotes if you want. This shifts the note text over (only affects notes that have sidenotes)
 
 ## Use
 
 Run the command `Insert Sidenote`.
 
-**If configured to use HTML format** It will insert this:
+### **If using HTML**
+
+It will insert this:
 
 ```html
 <span class="sidenote">{cursor}</span>
 ```
 
-**If confirgured to use footnotes format**, it will insert `[^1]` and create a sidenote for you to enter text in.
+### **If using footnotes**
+
+it will insert `[^1]` and create a sidenote for you to enter text in.
 
 ## Web Publishing
 
@@ -88,6 +98,9 @@ The snippet of CSS I've been using for web publishing is located in `/digital-ga
 
 ### Known issues
 
+- HTML sidenotes, in Reading Mode? - When pressing enter to update the last sidenote, it jumps up about 1 page
+- Changing style settings causes Editing mode sidenotes to disappear until restart
+- ~~Footnotes, Reading Mode - Editing mode box will overlap over a sidenote just below it~~
 - ~~Footnotes, when converted to sidenotes, collide and/or are not positioned properly in the sidenote column.~~ (Tentatively fixed 2/3/26)
 - ~~Sidenotes seem to collide with each other in certain circumstances. So far I just see it in Reading Mode.~~ (Fixed 2/2/26)
 - ~~Numbers may not update immediately when sequencing changes. For example, if the first sidenote is removed, the second one becomes the first but may still be annotated 2. Reopening the note fixes it~~ (Fixed 1/30/26)
@@ -97,4 +110,4 @@ The snippet of CSS I've been using for web publishing is located in `/digital-ga
 
 ## AI disclaimer
 
-Large Language Models (LLM) were used in the production and editing of this code. I'll do my best to keep it from being slop.
+Large Language Models (LLM) were used in the production and editing of this code. I'll do my best not to keep it from being slop.
