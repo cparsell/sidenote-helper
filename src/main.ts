@@ -2725,7 +2725,7 @@ export default class SidenotePlugin extends Plugin {
 		const isPrintContext =
 			element.closest?.(".print") ??
 			element.parentElement?.closest?.(".print");
-		if (!isPrintContext) return;
+		if (!isPrintContext || !this.settings.pdfExport) return;
 
 		if (element.querySelector(".sidenote-print")) return;
 

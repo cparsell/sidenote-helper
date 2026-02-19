@@ -43,6 +43,7 @@ export interface SidenoteSettings {
 	enableTransitions: boolean;
 	resetNumberingPerHeading: boolean;
 	editInReadingMode: boolean;
+	pdfExport: boolean;
 }
 
 export const DEFAULT_SETTINGS: SidenoteSettings = {
@@ -84,6 +85,7 @@ export const DEFAULT_SETTINGS: SidenoteSettings = {
 	enableTransitions: true,
 	resetNumberingPerHeading: false,
 	editInReadingMode: false,
+	pdfExport: false,
 };
 
 // ======================================================
@@ -514,6 +516,22 @@ export class SidenoteSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.editInReadingMode)
 					.onChange(async (value) => {
 						this.plugin.settings.editInReadingMode = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName(
+				"Include sidenotes in PDF export (HTML only - experimental)",
+			)
+			.setDesc(
+				"When enabled, sidenotes will be included in PDF exports. Note: this may cause formatting issues in some cases, and is not compatible with the Footnote format *yet*.",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.pdfExport as boolean)
+					.onChange(async (value) => {
+						this.plugin.settings.pdfExport = value;
 						await this.plugin.saveSettings();
 					}),
 			);
