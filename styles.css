@@ -4,6 +4,33 @@
    set by the plugin via JavaScript on document.documentElement.
    ========================================================== */
 
+/* ==========================================================
+   Print / PDF Export
+   ========================================================== */
+
+/* Hidden on screen */
+.sidenote-print-table {
+	display: none !important;
+}
+
+/* Visible in Obsidian PDF export */
+.print .sidenote-print-table {
+	top: 10px !important;
+	display: table !important;
+}
+
+/* Visible in browser print */
+@media print {
+	.sidenote-print-table {
+		display: table !important;
+	}
+	.sidenote {
+		display: none !important;
+	}
+}
+
+/* LAYOUT */
+
 /* === Layout variables === */
 .markdown-source-view.mod-cm6,
 .markdown-reading-view {

@@ -358,13 +358,7 @@ export default class SidenotePlugin extends Plugin {
 			}
 
 			if (hasContent) {
-				// console.log(
-				// 	"[Sidenotes] Post-processor: found content, format =",
-				// 	this.settings.sidenoteFormat,
-				// );
 				if (this.settings.sidenoteFormat !== "html") {
-					// For footnotes, use the debounced processor that waits
-					// for both refs AND definitions to be present
 					this.scheduleFootnoteProcessing();
 				} else {
 					setTimeout(() => {
@@ -375,6 +369,9 @@ export default class SidenotePlugin extends Plugin {
 						});
 					}, 0);
 				}
+
+				// Inject print sidenotes synchronously for PDF export
+				this.injectPrintSidenotes(element);
 			}
 		});
 
@@ -490,6 +487,7 @@ export default class SidenotePlugin extends Plugin {
 		for (const prop of propsToRemove) {
 			root.style.removeProperty(prop);
 		}
+
 		delete root.dataset.snBadgeStyle;
 		delete root.dataset.snShowNumbers;
 		delete root.dataset.snFormat;
@@ -1074,6 +1072,9 @@ export default class SidenotePlugin extends Plugin {
 				: "none",
 		);
 
+		// Print margin changes
+		this.injectPrintPageStyle();
+
 		// Data attributes for CSS selectors
 		root.dataset.snBadgeStyle = s.numberBadgeStyle;
 		root.dataset.snShowNumbers = s.showSidenoteNumbers ? "true" : "false";
@@ -1563,15 +1564,6 @@ export default class SidenotePlugin extends Plugin {
 
 			const definitions = this.parseFootnoteDefinitions(sourceContent);
 
-			// console.log(
-			// 	"[Sidenotes] Source content length:",
-			// 	sourceContent.length,
-			// 	"| Definitions found:",
-			// 	definitions.size,
-			// 	"| Keys:",
-			// 	Array.from(definitions.keys()),
-			// );
-
 			if (definitions.size === 0) {
 				if (!useHtmlSidenotes) return;
 			}
@@ -1583,19 +1575,6 @@ export default class SidenotePlugin extends Plugin {
 			);
 
 			const processedBaseIds = new Set<string>();
-
-			// console.log(
-			// 	"[Sidenotes] Found footnote sups in DOM:",
-			// 	footnoteSups.length,
-			// 	"| Elements:",
-			// 	Array.from(footnoteSups).map((el) => ({
-			// 		tag: el.tagName,
-			// 		id: el.id,
-			// 		class: el.className,
-			// 		dataFootnoteId: el.dataset.footnoteId,
-			// 		text: el.textContent?.trim(),
-			// 	})),
-			// );
 
 			for (const sup of Array.from(footnoteSups)) {
 				if (sup.closest(".sidenote-number")) continue;
@@ -1765,6 +1744,7 @@ export default class SidenotePlugin extends Plugin {
 
 		// Run positioning after DOM is fully settled and elements are laid out.
 		// We defer twice: once to let the browser insert elements, once to lay them out.
+
 		requestAnimationFrame(() => {
 			requestAnimationFrame(() => {
 				if (!readingRoot.isConnected) return;
@@ -1802,6 +1782,31 @@ export default class SidenotePlugin extends Plugin {
 				this.resolveCollisions(allMargins, this.settings.collisionSpacing);
 			});
 		});
+	}
+
+	private injectPrintPageStyle() {
+		document.getElementById("sidenote-print-page-style")?.remove();
+
+		const style = document.createElement("style");
+		style.id = "sidenote-print-page-style";
+
+		const isRight = this.settings.sidenotePosition !== "left";
+
+		style.textContent = isRight
+			? `@page { 
+				margin-left: 1.5cm; 
+				margin-right: 0.1cm; 
+				margin-top: 1.5cm; 
+				margin-bottom: 1.5cm; 
+			}`
+			: `@page { 
+				margin-left: 0.1cm; 
+				margin-right: 1.5cm; 
+				margin-top: 1.5cm; 
+				margin-bottom: 1.5cm; 
+			}`;
+
+		document.head.appendChild(style);
 	}
 
 	private scheduleFootnoteProcessing() {
@@ -1950,6 +1955,8 @@ export default class SidenotePlugin extends Plugin {
 
 			wrapper.remove();
 		}
+		// Also remove any print-only sidenote elements
+		root.querySelectorAll(".sidenote-print").forEach((el) => el.remove());
 	}
 
 	private findPrecedingHeading(el: HTMLElement): HTMLElement | null {
@@ -2496,61 +2503,6 @@ export default class SidenotePlugin extends Plugin {
 	}
 
 	/**
-	 * Find the footnote definition in source text and return the range to replace.
-	 * Returns both EditorPosition (for editor.replaceRange) and raw offsets
-	 * (for vault.modify fallback).
-	 */
-	private buildFootnoteReplacement(
-		content: string,
-		footnoteId: string,
-		_newText: string,
-	): {
-		from: EditorPosition;
-		to: EditorPosition;
-		offsetFrom: number;
-		offsetTo: number;
-	} | null {
-		const escapedId = footnoteId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(
-			`^(\\[\\^${escapedId}\\]:\\s*)(.+(?:\\n(?:[ \\t]+.+)*)?)$`,
-			"gm",
-		);
-
-		const match = regex.exec(content);
-		if (!match) return null;
-
-		const prefix = match[1] ?? "";
-		const offsetFrom = match.index + prefix.length;
-		const offsetTo = match.index + match[0].length;
-
-		// Convert offsets to line/ch positions
-		const from = this.offsetToEditorPos(content, offsetFrom);
-		const to = this.offsetToEditorPos(content, offsetTo);
-
-		return { from, to, offsetFrom, offsetTo };
-	}
-
-	/**
-	 * Convert a character offset to an EditorPosition {line, ch}.
-	 */
-	private offsetToEditorPos(
-		content: string,
-		offset: number,
-	): EditorPosition {
-		let line = 0;
-		let ch = 0;
-		for (let i = 0; i < offset && i < content.length; i++) {
-			if (content[i] === "\n") {
-				line++;
-				ch = 0;
-			} else {
-				ch++;
-			}
-		}
-		return { line, ch };
-	}
-
-	/**
 	 * Set up a link element with proper attributes and click handlers.
 	 * Handles both external links and internal Obsidian links.
 	 */
@@ -2823,6 +2775,258 @@ export default class SidenotePlugin extends Plugin {
 		}
 
 		return definitions;
+	}
+
+	// ==================== Print Handling ====================
+
+	/**
+	 * Inject print sidenotes into a post-processed element.
+	 * Runs synchronously so the elements exist before Obsidian
+	 * captures the DOM for PDF export.
+	 */
+	private injectPrintSidenotes(element: HTMLElement) {
+		if (element.querySelector(".sidenote-print")) return;
+
+		const content = this.cachedSourceContent || "";
+		const position = this.settings.sidenotePosition;
+		const isRight = position !== "left";
+
+		// Collect sidenotes keyed by their anchor paragraph
+		const sidenotesByAnchor = new Map<HTMLElement, HTMLElement[]>();
+
+		if (this.settings.sidenoteFormat === "html") {
+			const spans = element.querySelectorAll<HTMLElement>("span.sidenote");
+			let counter = 0;
+
+			for (const span of Array.from(spans)) {
+				const text = span.textContent ?? "";
+				if (!text.trim()) continue;
+
+				counter++;
+
+				// Inject inline reference number next to the sidenote span
+				const refNum = document.createElement("sup");
+				refNum.style.cssText =
+					"font-size: 0.75em; font-weight: bold; color: #000;";
+				refNum.textContent = this.formatNumber(counter);
+				span.parentNode?.insertBefore(refNum, span.nextSibling);
+
+				const printEl = this.buildPrintSidenote(
+					text,
+					this.formatNumber(counter),
+				);
+
+				const anchor = span.closest(
+					"p, li, h1, h2, h3, h4, h5, h6",
+				) as HTMLElement | null;
+				if (anchor) {
+					const list = sidenotesByAnchor.get(anchor) ?? [];
+					list.push(printEl);
+					sidenotesByAnchor.set(anchor, list);
+				}
+			}
+		} else if (content) {
+			const definitions = this.parseFootnoteDefinitions(content);
+			if (definitions.size === 0) return;
+
+			const refs = element.querySelectorAll<HTMLElement>(
+				"sup.footnote-ref, sup[class*='footnote'], sup[id^='fnref-'], a.footnote-link",
+			);
+			if (refs.length === 0) return;
+
+			const processedIds = new Set<string>();
+			let counter = 0;
+
+			for (const ref of Array.from(refs)) {
+				const id = this.extractFootnoteId(ref);
+				if (!id || processedIds.has(id)) continue;
+				processedIds.add(id);
+
+				const text = definitions.get(id);
+				if (!text) continue;
+
+				counter++;
+
+				// Inject inline reference number next to the footnote ref
+				const refTarget =
+					ref.tagName === "SUP" ? ref : (ref.closest("sup") ?? ref);
+				const refNum = document.createElement("sup");
+				refNum.style.cssText =
+					"font-size: 0.75em; font-weight: bold; color: #000;";
+				refNum.textContent = this.formatNumber(counter);
+				refTarget.parentNode?.insertBefore(refNum, refTarget.nextSibling);
+
+				const printEl = this.buildPrintSidenote(
+					text,
+					this.formatNumber(counter),
+				);
+
+				const sup = ref.tagName === "SUP" ? ref : ref.closest("sup");
+				const anchor = sup?.closest(
+					"p, li, h1, h2, h3, h4, h5, h6",
+				) as HTMLElement | null;
+				if (anchor) {
+					const list = sidenotesByAnchor.get(anchor) ?? [];
+					list.push(printEl);
+					sidenotesByAnchor.set(anchor, list);
+				}
+			}
+		}
+
+		if (sidenotesByAnchor.size === 0) return;
+
+		// For each anchor paragraph that has sidenotes, convert it to
+		// a table layout with the content on one side and sidenotes on the other.
+		for (const [anchor, sidenotes] of sidenotesByAnchor) {
+			if (!anchor.parentNode) continue;
+
+			// Create a table — tables render reliably in all PDF engines
+			const table = document.createElement("table");
+			table.className = "sidenote-print-table";
+			table.style.cssText = `
+				width: 100%; 
+				border-collapse: collapse; 
+				border: none; 
+				margin: 0; 
+				padding: 0; 
+				table-layout: fixed;
+			`;
+
+			const row = document.createElement("tr");
+			row.style.cssText = "border: none; vertical-align: top;";
+
+			const contentCell = document.createElement("td");
+			contentCell.style.cssText =
+				"border: none; padding: 0; vertical-align: top; width: 70%;";
+
+			const sidenoteCell = document.createElement("td");
+			sidenoteCell.style.cssText = isRight
+				? `border: none; 
+				padding: 2.5em 0 0 2em; 
+				vertical-align: top; 
+				width: 30%; 
+				font-size: 0.75em; 
+				line-height: 1.35; 
+				color: #000;`
+				: `border: none; 
+				padding: 2.5em 2em 0 0; 
+				vertical-align: top; 
+				width: 30%; 
+				font-size: 0.75em; 
+				line-height: 1.35; 
+				color: #000; 
+				text-align: right;`;
+
+			// Move the paragraph content into the content cell
+			anchor.parentNode.insertBefore(table, anchor);
+			contentCell.appendChild(anchor);
+
+			// Stack all sidenotes in the sidenote cell
+			for (const sn of sidenotes) {
+				if (sidenoteCell.childNodes.length > 0) {
+					const spacer = document.createElement("div");
+					spacer.style.cssText = "height: 0.4em;";
+					sidenoteCell.appendChild(spacer);
+				}
+				sidenoteCell.appendChild(sn);
+			}
+
+			// Inject a style tag into this element to constrain all
+			// non-table content to the same width as the content column (70%).
+			// This ensures paragraphs without sidenotes don't extend into
+			// the sidenote column space.
+			if (!element.querySelector(".sidenote-print-width-style")) {
+				const style = document.createElement("style");
+				style.className = "sidenote-print-width-style";
+				const isRight = this.settings.sidenotePosition !== "left";
+				style.textContent = isRight
+					? `
+					p, li, h1, h2, h3, h4, h5, h6, blockquote, .callout,
+					ul, ol, hr, .math, .MathJax, pre, .contains-task-list {
+						max-width: 70% !important;
+					}
+					.sidenote-print-table,
+					.sidenote-print-table td,
+					.sidenote-print-table p,
+					.sidenote-print-table li,
+					.sidenote-print-table h1,
+					.sidenote-print-table h2,
+					.sidenote-print-table h3,
+					.sidenote-print-table h4,
+					.sidenote-print-table h5,
+					.sidenote-print-table h6 {
+						max-width: none !important;
+					}
+				`
+					: `
+					p, li, h1, h2, h3, h4, h5, h6, blockquote, .callout,
+					ul, ol, hr, .math, .MathJax, pre, .contains-task-list {
+						max-width: 70% !important;
+						margin-left: 30% !important;
+					}
+					.sidenote-print-table,
+					.sidenote-print-table td,
+					.sidenote-print-table p,
+					.sidenote-print-table li,
+					.sidenote-print-table h1,
+					.sidenote-print-table h2,
+					.sidenote-print-table h3,
+					.sidenote-print-table h4,
+					.sidenote-print-table h5,
+					.sidenote-print-table h6 {
+						max-width: none !important;
+						margin-left: 0 !important;
+					}
+				`;
+				element.appendChild(style);
+			}
+
+			if (isRight) {
+				row.appendChild(contentCell);
+				row.appendChild(sidenoteCell);
+			} else {
+				row.appendChild(sidenoteCell);
+				row.appendChild(contentCell);
+			}
+
+			table.appendChild(row);
+		}
+	}
+
+	private buildPrintSidenote(text: string, numStr: string): HTMLElement {
+		const printEl = document.createElement("small");
+		printEl.className = "sidenote-print";
+		// Use inline style so nothing can override visibility
+		printEl.style.cssText = "display: block; margin: 0; padding: 0;";
+
+		if (this.settings.showSidenoteNumbers) {
+			const numSpan = document.createElement("span");
+			numSpan.style.cssText =
+				"font-weight: bold; margin-right: 0.3em; color: #333;";
+			numSpan.textContent = numStr + ".";
+			printEl.appendChild(numSpan);
+		}
+
+		printEl.appendChild(
+			this.renderLinksToFragment(this.normalizeText(text)),
+		);
+
+		return printEl;
+	}
+
+	private extractFootnoteId(el: HTMLElement): string | null {
+		if (el.dataset.footnoteId) return el.dataset.footnoteId;
+
+		const id = el.id || el.closest("sup")?.id || "";
+		const idMatch = id.match(/^fnref-?(.+?)(?:-\d+)?$/);
+		if (idMatch?.[1]) return idMatch[1];
+
+		const link = el.tagName === "A" ? el : el.querySelector("a");
+		const href = link?.getAttribute("href") ?? "";
+		const hrefMatch = href.match(/#fn-?(.+)/);
+		if (hrefMatch?.[1]) return hrefMatch[1];
+
+		return null;
 	}
 
 	// ==================== Scheduling ====================
