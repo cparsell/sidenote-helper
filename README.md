@@ -11,7 +11,7 @@ _Basic sidenote capabilities demonstrated_
 _An optional style that highlights references._
 
 ![Neumorphic badges](https://github.com/cparsell/sidenotes/blob/main/Screen-Record-Editing.gif)
-_Editing a sidenote in the margin_
+_Editing a sidenote in the margin and then adding a new sidenote_
 
 ### Features
 
