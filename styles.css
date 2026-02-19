@@ -24,9 +24,9 @@
 	.sidenote-print-table {
 		display: table !important;
 	}
-	.sidenote {
+	/* .sidenote {
 		display: none !important;
-	}
+	} */
 }
 
 /* LAYOUT */
@@ -210,7 +210,7 @@
 	transition: var(--sn-transition, none);
 }
 
-.sidenote-margin:hover {
+.sidenote-margin:hover:not([data-editing="true"]) {
 	color: var(--sn-hover-color, var(--text-muted));
 }
 
@@ -435,6 +435,7 @@
 	box-shadow: var(--sn-badge-shadow);
 }
 
+/* Highlight sidenote when hovering over number in the note text */
 .sidenote-number:hover .sidenote-margin:not([data-editing="true"]) {
 	color: var(--sn-hover-color, var(--text-muted)) !important;
 }
@@ -516,10 +517,6 @@
 
 [data-sn-badge-style="pill"] .sidenote-number:hover::after {
 	box-shadow: var(--sn-pill-hover-shadow);
-}
-
-[data-sn-badge-style="pill"] .sidenote-number:hover {
-	/* color: var(--text-muted) !important; */
 }
 
 /* ==========================================================
